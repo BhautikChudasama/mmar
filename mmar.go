@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"html"
@@ -33,32 +34,43 @@ func invalidSubcommands() {
 }
 
 type Tunnel struct {
-	id string
+	id 		string
+	conn 	net.Conn
 }
 
 func (t Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s - %s?%s", r.Method, html.EscapeString(r.URL.Path), r.URL.RawQuery)
 	fmt.Fprintf(w, "Received: %s %q", r.Method, html.EscapeString(r.URL.Path))
+
+	// Writing request to buffer to forward it
+	var requestBuff bytes.Buffer
+	r.Write(&requestBuff)
+
+	if _, err := t.conn.Write(requestBuff.Bytes()); err != nil {
+		log.Fatal(err)
+	}
+
 	w.Write([]byte("Got Request!"))
 }
 
-func (t Tunnel) handleTcpConnection(conn net.Conn) {
-	log.Printf("TCP Conn from %s", conn.LocalAddr().String())
-	status, err := bufio.NewReader(conn).ReadString('\n')
+func (t Tunnel) handleTcpConnection() {
+	log.Printf("TCP Conn from %s", t.conn.LocalAddr().String())
+	status, err := bufio.NewReader(t.conn).ReadString('\n')
 	if err != nil {
 		log.Fatalf("Failed to read data from TCP conn: %v", err)
 	}
 	fmt.Printf("status from client: %s", status)
 
-	if _, err := conn.Write([]byte("Got your TCP Request!\n")); err != nil {
-		log.Fatal(err)
-	}
+	// TODO: Handle non-HTTP request data being sent to mmar client gracefully
+
+	// if _, err := t.conn.Write([]byte("Got your TCP Request!\n")); err != nil {
+	// 	log.Fatal(err)
+	// }
 }
 
 func runMmarServer(tcpPort string, httpPort string) {
 	mux := http.NewServeMux()
 	tunnel := Tunnel{id: "abc123"}
-	mux.Handle("/", tunnel)
 
 	go func() {
 		log.Print("Listening for TCP Requests...")
@@ -69,10 +81,14 @@ func runMmarServer(tcpPort string, httpPort string) {
 		}
 		for {
 			conn, err := ln.Accept()
+			defer conn.Close()
 			if err != nil {
 				log.Fatalf("Failed to accept TCP connection: %v", err)
 			}
-			go tunnel.handleTcpConnection(conn)
+			tunnel.conn = conn
+			// TODO: Figure out a better placement for this, to avoid race condition
+			mux.Handle("/", tunnel)
+			go tunnel.handleTcpConnection()
 		}
 	}()
 
@@ -91,11 +107,16 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 
 	conn.Write([]byte("Hello from local client!\n"))
 	for {
-		status, err := bufio.NewReader(conn).ReadString('\n')
+		// TODO: Handle non-HTTP request data being sent to mmar client gracefully, see above TODO
+		// status, err := bufio.NewReader(conn).ReadBytes('\n')
+		req, err := http.ReadRequest(bufio.NewReader(conn))
 		if err != nil {
 			log.Fatalf("Failed to read data from TCP conn: %v", err)
 		}
-		fmt.Printf("status from server: %s", status)
+		fmt.Printf("status from server: %v", req)
+		fmt.Printf("body: %s", req.Body)
+		// TODO: Implementing forwarding request to local dev server running
+		// and forward response back to mmar server
 	}
 }
 
