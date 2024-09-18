@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 )
 
@@ -59,13 +60,16 @@ func (t Tunnel) handleTcpConnection() {
 	if err != nil {
 		log.Fatalf("Failed to read data from TCP conn: %v", err)
 	}
-	fmt.Printf("status from client: %s", status)
+	fmt.Printf("status from client: %s\n\n", status)
 
 	// TODO: Handle non-HTTP request data being sent to mmar client gracefully
 
 	// if _, err := t.conn.Write([]byte("Got your TCP Request!\n")); err != nil {
 	// 	log.Fatal(err)
 	// }
+
+
+	// TODO: Implement reading response from mmar client and sending it back to original client
 }
 
 func runMmarServer(tcpPort string, httpPort string) {
@@ -100,6 +104,7 @@ func runMmarServer(tcpPort string, httpPort string) {
 func runMmarClient(serverTcpPort string, tunnelHost string) {
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", tunnelHost, serverTcpPort))
 	defer conn.Close()
+	fwdClient := &http.Client{}
 
 	if err != nil {
 		log.Fatalf("Failed to connect to TCP server: %v", err)
@@ -113,10 +118,31 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 		if err != nil {
 			log.Fatalf("Failed to read data from TCP conn: %v", err)
 		}
-		fmt.Printf("status from server: %v", req)
-		fmt.Printf("body: %s", req.Body)
-		// TODO: Implementing forwarding request to local dev server running
-		// and forward response back to mmar server
+		fmt.Printf("status from server: %v\n\n", req)
+		fmt.Printf("body: %s\n\n", req.Body)
+
+		// TODO: Extract this into a separate function
+		localURL, urlErr := url.Parse(fmt.Sprintf("http://localhost:%v%v", CLIENT_PORT, req.RequestURI))
+		if urlErr != nil {
+			log.Fatalf("Failed to parse URL: %v", urlErr)
+		}
+		// Set URL to send request to local server
+		req.URL = localURL
+		// Clear requestURI since it is now a client request
+		req.RequestURI = ""
+
+		resp, fwdErr := fwdClient.Do(req)
+		if fwdErr != nil {
+			log.Fatalf("Failed to forward: %v", fwdErr)
+		}
+
+		// Writing request to buffer to forward it
+		var responseBuff bytes.Buffer
+		resp.Write(&responseBuff)
+
+		if _, err := conn.Write(responseBuff.Bytes()); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 
