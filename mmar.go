@@ -41,7 +41,6 @@ type Tunnel struct {
 
 func (t Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s - %s?%s", r.Method, html.EscapeString(r.URL.Path), r.URL.RawQuery)
-	fmt.Fprintf(w, "Received: %s %q", r.Method, html.EscapeString(r.URL.Path))
 
 	// Writing request to buffer to forward it
 	var requestBuff bytes.Buffer
@@ -51,7 +50,22 @@ func (t Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 	}
 
-	w.Write([]byte("Got Request!"))
+	// TODO: Handle larger responses that require multiple reads
+
+	// Read response for forwarded request
+	respReader := bufio.NewReader(t.conn)
+	resp, respErr := http.ReadResponse(respReader, r)
+	if respErr != nil {
+		log.Fatalf("Failed to return response: %v", respErr)
+	}
+
+	// TODO: Look into how response HTTP headers should be properly sent back
+
+	// Write response to buffer to return it to original client
+	var responseBuff bytes.Buffer
+	resp.Write(&responseBuff)
+
+	w.Write(responseBuff.Bytes())
 }
 
 func (t Tunnel) handleTcpConnection() {
@@ -67,9 +81,6 @@ func (t Tunnel) handleTcpConnection() {
 	// if _, err := t.conn.Write([]byte("Got your TCP Request!\n")); err != nil {
 	// 	log.Fatal(err)
 	// }
-
-
-	// TODO: Implement reading response from mmar client and sending it back to original client
 }
 
 func runMmarServer(tcpPort string, httpPort string) {
