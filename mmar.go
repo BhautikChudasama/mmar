@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -40,7 +41,7 @@ type Tunnel struct {
 }
 
 func (t Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s - %s?%s", r.Method, html.EscapeString(r.URL.Path), r.URL.RawQuery)
+	log.Printf("%s - %s%s", r.Method, html.EscapeString(r.URL.Path), r.URL.RawQuery)
 
 	// Writing request to buffer to forward it
 	var requestBuff bytes.Buffer
@@ -50,22 +51,39 @@ func (t Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 	}
 
-	// TODO: Handle larger responses that require multiple reads
+	// TODO: Look into if we need to handle larger responses that require multiple reads
 
 	// Read response for forwarded request
 	respReader := bufio.NewReader(t.conn)
 	resp, respErr := http.ReadResponse(respReader, r)
 	if respErr != nil {
-		log.Fatalf("Failed to return response: %v", respErr)
+		log.Fatalf("Failed to return response: %v\n\n", respErr)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	fmt.Printf("resp.Header: %v\n\n", resp.Header)
+
+	respBody, respBodyErr := io.ReadAll(resp.Body)
+	if respBodyErr != nil {
+		log.Fatalf("Failed to parse response body: %v\n\n", respBodyErr)
+		os.Exit(1)
 	}
 
-	// TODO: Look into how response HTTP headers should be properly sent back
+	// Set headers for response
+	for hKey, hVal := range resp.Header {
+		w.Header().Set(hKey, hVal[0])
+		// Add remaining values for header if more than than one exists
+		for i := 1; i < len(hVal); i++ {
+			w.Header().Add(hKey, hVal[i])
+		}
+	}
 
-	// Write response to buffer to return it to original client
-	var responseBuff bytes.Buffer
-	resp.Write(&responseBuff)
+	// Write response headers with response status code to original client
+	w.WriteHeader(resp.StatusCode)
 
-	w.Write(responseBuff.Bytes())
+	// Write the response body to original client
+	w.Write(respBody)
 }
 
 func (t Tunnel) handleTcpConnection() {
