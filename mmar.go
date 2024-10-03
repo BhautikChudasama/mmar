@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	SERVER_CMD  = "server"
-	CLIENT_CMD  = "client"
-	CLIENT_PORT = "8000"
+	SERVER_CMD       = "server"
+	CLIENT_CMD       = "client"
+	CLIENT_PORT      = "8000"
 	SERVER_HTTP_PORT = "3376"
-	SERVER_TCP_PORT = "6673"
-	TUNNEL_HOST = "https://mmar.dev"
+	SERVER_TCP_PORT  = "6673"
+	TUNNEL_HOST      = "https://mmar.dev"
 )
 
 // use mmar like so:
@@ -35,70 +35,102 @@ func invalidSubcommands() {
 	os.Exit(0)
 }
 
-type Tunnel struct {
-	id 		string
-	conn 	net.Conn
+type TunneledRequest struct {
+	responseChannel chan TunneledResponse
+	responseWriter  http.ResponseWriter
+	request         *http.Request
 }
 
-func (t Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+type TunneledResponse struct {
+	statusCode int
+	body       []byte
+}
+
+type Tunnel struct {
+	id      string
+	conn    net.Conn
+	channel chan TunneledRequest
+}
+
+func (t *Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s - %s%s", r.Method, html.EscapeString(r.URL.Path), r.URL.RawQuery)
 
-	// Writing request to buffer to forward it
-	var requestBuff bytes.Buffer
-	r.Write(&requestBuff)
+	// Create response channel for tunneled request
+	respChannel := make(chan TunneledResponse)
 
-	if _, err := t.conn.Write(requestBuff.Bytes()); err != nil {
-		log.Fatal(err)
+	// Tunnel the request
+	t.channel <- TunneledRequest{
+		responseChannel: respChannel,
+		responseWriter:  w,
+		request:         r,
 	}
 
-	// TODO: Look into if we need to handle larger responses that require multiple reads
-
-	// Read response for forwarded request
-	respReader := bufio.NewReader(t.conn)
-	resp, respErr := http.ReadResponse(respReader, r)
-	if respErr != nil {
-		log.Fatalf("Failed to return response: %v\n\n", respErr)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	fmt.Printf("resp.Header: %v\n\n", resp.Header)
-
-	respBody, respBodyErr := io.ReadAll(resp.Body)
-	if respBodyErr != nil {
-		log.Fatalf("Failed to parse response body: %v\n\n", respBodyErr)
-		os.Exit(1)
-	}
-
-	// Set headers for response
-	for hKey, hVal := range resp.Header {
-		w.Header().Set(hKey, hVal[0])
-		// Add remaining values for header if more than than one exists
-		for i := 1; i < len(hVal); i++ {
-			w.Header().Add(hKey, hVal[i])
-		}
-	}
+	// Await response for tunneled request
+	resp, _ := <-respChannel
 
 	// Write response headers with response status code to original client
-	w.WriteHeader(resp.StatusCode)
+	w.WriteHeader(resp.statusCode)
 
 	// Write the response body to original client
-	w.Write(respBody)
+	w.Write(resp.body)
 }
 
-func (t Tunnel) handleTcpConnection() {
+func (t *Tunnel) processTunneledRequests() {
+	for {
+		// TODO: handle ok? case and gracefully exiting goroutine
+		// Read requests coming in tunnel channel
+		msg, _ := <-t.channel
+
+		// Writing request to buffer to forward it
+		var requestBuff bytes.Buffer
+		msg.request.Write(&requestBuff)
+
+		// Forward the request to mmar client
+		if _, err := t.conn.Write(requestBuff.Bytes()); err != nil {
+			log.Fatal(err)
+		}
+
+		// Read response for forwarded request
+		respReader := bufio.NewReader(t.conn)
+		resp, respErr := http.ReadResponse(respReader, msg.request)
+		if respErr != nil {
+			failedReq := fmt.Sprintf("%s - %s%s", msg.request.Method, html.EscapeString(msg.request.URL.Path), msg.request.URL.RawQuery)
+			log.Fatalf("Failed to return response: %v\n\n for req: %v", respErr, failedReq)
+		}
+		defer resp.Body.Close()
+
+		respBody, respBodyErr := io.ReadAll(resp.Body)
+		if respBodyErr != nil {
+			log.Fatalf("Failed to parse response body: %v\n\n", respBodyErr)
+			os.Exit(1)
+		}
+
+		// Set headers for response
+		for hKey, hVal := range resp.Header {
+			msg.responseWriter.Header().Set(hKey, hVal[0])
+			// Add remaining values for header if more than than one exists
+			for i := 1; i < len(hVal); i++ {
+				msg.responseWriter.Header().Add(hKey, hVal[i])
+			}
+		}
+
+		// Send response back to goroutine handling the request
+		msg.responseChannel <- TunneledResponse{statusCode: resp.StatusCode, body: respBody}
+	}
+}
+
+func (t *Tunnel) handleTcpConnection() {
 	log.Printf("TCP Conn from %s", t.conn.LocalAddr().String())
-	status, err := bufio.NewReader(t.conn).ReadString('\n')
+	_, err := bufio.NewReader(t.conn).ReadString('\n')
 	if err != nil {
 		log.Fatalf("Failed to read data from TCP conn: %v", err)
 	}
-	fmt.Printf("status from client: %s\n\n", status)
 
-	// TODO: Handle non-HTTP request data being sent to mmar client gracefully
+	// Create channel to tunnel request to
+	t.channel = make(chan TunneledRequest)
 
-	// if _, err := t.conn.Write([]byte("Got your TCP Request!\n")); err != nil {
-	// 	log.Fatal(err)
-	// }
+	// Start goroutine to process tunneled requests
+	go t.processTunneledRequests()
 }
 
 func runMmarServer(tcpPort string, httpPort string) {
@@ -120,7 +152,7 @@ func runMmarServer(tcpPort string, httpPort string) {
 			}
 			tunnel.conn = conn
 			// TODO: Figure out a better placement for this, to avoid race condition
-			mux.Handle("/", tunnel)
+			mux.Handle("/", &tunnel)
 			go tunnel.handleTcpConnection()
 		}
 	}()
@@ -140,32 +172,33 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 	}
 
 	conn.Write([]byte("Hello from local client!\n"))
+
 	for {
-		// TODO: Handle non-HTTP request data being sent to mmar client gracefully, see above TODO
+		// TODO: Handle non-HTTP request data being sent to mmar client gracefully
 		// status, err := bufio.NewReader(conn).ReadBytes('\n')
 		req, err := http.ReadRequest(bufio.NewReader(conn))
 		if err != nil {
 			log.Fatalf("Failed to read data from TCP conn: %v", err)
 		}
-		fmt.Printf("status from server: %v\n\n", req)
-		fmt.Printf("body: %s\n\n", req.Body)
 
 		// TODO: Extract this into a separate function
 		localURL, urlErr := url.Parse(fmt.Sprintf("http://localhost:%v%v", CLIENT_PORT, req.RequestURI))
 		if urlErr != nil {
 			log.Fatalf("Failed to parse URL: %v", urlErr)
 		}
+
 		// Set URL to send request to local server
 		req.URL = localURL
 		// Clear requestURI since it is now a client request
 		req.RequestURI = ""
 
+		log.Printf("%s - %s%s", req.Method, html.EscapeString(req.URL.Path), req.URL.RawQuery)
 		resp, fwdErr := fwdClient.Do(req)
 		if fwdErr != nil {
 			log.Fatalf("Failed to forward: %v", fwdErr)
 		}
 
-		// Writing request to buffer to forward it
+		// Writing response to buffer to tunnel it back
 		var responseBuff bytes.Buffer
 		resp.Write(&responseBuff)
 
