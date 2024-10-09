@@ -136,6 +136,7 @@ func (t *Tunnel) handleTcpConnection() {
 func runMmarServer(tcpPort string, httpPort string) {
 	mux := http.NewServeMux()
 	tunnel := Tunnel{id: "abc123"}
+	mux.Handle("/", &tunnel)
 
 	go func() {
 		log.Print("Listening for TCP Requests...")
@@ -175,9 +176,12 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 
 	for {
 		// TODO: Handle non-HTTP request data being sent to mmar client gracefully
-		// status, err := bufio.NewReader(conn).ReadBytes('\n')
 		req, err := http.ReadRequest(bufio.NewReader(conn))
 		if err != nil {
+			if err == io.EOF {
+				log.Print("Connection to mmar server closed or disconnected. Exiting...")
+				os.Exit(0)
+			}
 			log.Fatalf("Failed to read data from TCP conn: %v", err)
 		}
 
