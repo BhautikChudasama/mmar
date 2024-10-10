@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 )
 
 const (
@@ -147,39 +149,34 @@ func runMmarServer(tcpPort string, httpPort string) {
 		}
 		for {
 			conn, err := ln.Accept()
-			defer conn.Close()
+			// defer conn.Close()
 			if err != nil {
 				log.Fatalf("Failed to accept TCP connection: %v", err)
 			}
 			tunnel.conn = conn
-			// TODO: Figure out a better placement for this, to avoid race condition
-			mux.Handle("/", &tunnel)
 			go tunnel.handleTcpConnection()
 		}
 	}()
 
 	log.Print("Listening for HTTP Requests...")
-	http.ListenAndServe(fmt.Sprintf(":%s", httpPort), mux)
-
+	if err := http.ListenAndServe(fmt.Sprintf(":%s", httpPort), mux); err != nil && err != http.ErrServerClosed {
+		fmt.Fprintf(os.Stderr, "Error listening and serving: %s\n", err)
+	}
 }
 
-func runMmarClient(serverTcpPort string, tunnelHost string) {
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", tunnelHost, serverTcpPort))
-	defer conn.Close()
+func forwardRequestsToLocalhost(conn net.Conn) {
 	fwdClient := &http.Client{}
-
-	if err != nil {
-		log.Fatalf("Failed to connect to TCP server: %v", err)
-	}
-
-	conn.Write([]byte("Hello from local client!\n"))
-
 	for {
 		// TODO: Handle non-HTTP request data being sent to mmar client gracefully
 		req, err := http.ReadRequest(bufio.NewReader(conn))
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				log.Print("Connection to mmar server closed or disconnected. Exiting...")
+				os.Exit(0)
+			}
+
+			if errors.Is(err, net.ErrClosed) {
+				log.Printf("Connection closed.")
 				os.Exit(0)
 			}
 			log.Fatalf("Failed to read data from TCP conn: %v", err)
@@ -210,6 +207,28 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 			log.Fatal(err)
 		}
 	}
+}
+
+func runMmarClient(serverTcpPort string, tunnelHost string) {
+	// Channel handler for interrupt signal
+	sigInt := make(chan os.Signal, 1)
+	signal.Notify(sigInt, os.Interrupt)
+
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", tunnelHost, serverTcpPort))
+	defer conn.Close()
+
+	if err != nil {
+		log.Fatalf("Failed to connect to TCP server: %v", err)
+	}
+
+	conn.Write([]byte("Hello from local client!\n"))
+
+	// Start processing requests coming from mmar server, forwarding them to localhost
+	go forwardRequestsToLocalhost(conn)
+
+	// Wait for an interrupt signal, if received, terminate gracefully
+	<-sigInt
+	log.Printf("Gracefully shutting down client...")
 }
 
 func main() {
