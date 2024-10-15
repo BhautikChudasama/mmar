@@ -188,6 +188,10 @@ func (t *Tunnel) handleTcpConnection() {
 }
 
 func runMmarServer(tcpPort string, httpPort string) {
+	// Channel handler for interrupt signal
+	sigInt := make(chan os.Signal, 1)
+	signal.Notify(sigInt, os.Interrupt)
+
 	mux := http.NewServeMux()
 	tunnel := Tunnel{id: "abc123"}
 	mux.Handle("/", &tunnel)
@@ -209,10 +213,16 @@ func runMmarServer(tcpPort string, httpPort string) {
 		}
 	}()
 
-	log.Print("Listening for HTTP Requests...")
-	if err := http.ListenAndServe(fmt.Sprintf(":%s", httpPort), mux); err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "Error listening and serving: %s\n", err)
-	}
+	go func() {
+		log.Print("Listening for HTTP Requests...")
+		if err := http.ListenAndServe(fmt.Sprintf(":%s", httpPort), mux); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "Error listening and serving: %s\n", err)
+		}
+	}()
+
+	// Wait for an interrupt signal, if received, terminate gracefully
+	<-sigInt
+	log.Printf("Gracefully shutting down server...")
 }
 
 func parseTunneledMessage(conn net.Conn) (TunnelMessage, *bufio.Reader) {
