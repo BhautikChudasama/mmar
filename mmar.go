@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"time"
 )
 
 const (
@@ -23,6 +24,13 @@ const (
 	SERVER_HTTP_PORT = "3376"
 	SERVER_TCP_PORT  = "6673"
 	TUNNEL_HOST      = "https://mmar.dev"
+
+	HEARTBEAT_INTERVAL = 5 * time.Second
+)
+
+const (
+	HEARTBEAT = iota + 1
+	REQUEST
 )
 
 // use mmar like so:
@@ -49,9 +57,34 @@ type TunneledResponse struct {
 }
 
 type Tunnel struct {
-	id      string
-	conn    net.Conn
-	channel chan TunneledRequest
+	id              string
+	conn            net.Conn
+	channel         chan TunneledRequest
+	heartbeatTicker *time.Ticker
+}
+
+type TunnelMessage struct {
+	msgType int
+	msgData []byte
+}
+
+func (t *Tunnel) sendMessage(msgType int, dataBytes []byte) error {
+	var messageBytes []byte
+	switch msgType {
+	case HEARTBEAT:
+		messageBytes = bytes.Join([][]byte{[]byte("HEARTBEAT"), dataBytes}, []byte("\n"))
+	case REQUEST:
+		messageBytes = bytes.Join([][]byte{[]byte("REQUEST"), dataBytes}, []byte("\n"))
+	default:
+		log.Fatalf("Invalid TunnelMessage type: %v:", msgType)
+	}
+
+	_, err := t.conn.Write(messageBytes)
+	return err
+}
+
+func (t *Tunnel) sendHeartbeat() error {
+	return t.sendMessage(HEARTBEAT, []byte(""))
 }
 
 func (t *Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -79,16 +112,22 @@ func (t *Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (t *Tunnel) processTunneledRequests() {
 	for {
-		// TODO: handle ok? case and gracefully exiting goroutine
 		// Read requests coming in tunnel channel
-		msg, _ := <-t.channel
+		msg, ok := <-t.channel
+		if !ok {
+			// Channel closed, client disconencted, shutdown goroutine
+			return
+		}
+
+		// Reset heartbeat ticker when receiving request
+		t.heartbeatTicker.Reset(HEARTBEAT_INTERVAL)
 
 		// Writing request to buffer to forward it
 		var requestBuff bytes.Buffer
 		msg.request.Write(&requestBuff)
 
 		// Forward the request to mmar client
-		if _, err := t.conn.Write(requestBuff.Bytes()); err != nil {
+		if err := t.sendMessage(REQUEST, requestBuff.Bytes()); err != nil {
 			log.Fatal(err)
 		}
 
@@ -121,18 +160,31 @@ func (t *Tunnel) processTunneledRequests() {
 	}
 }
 
+func (t *Tunnel) startHeartbeat() {
+	t.heartbeatTicker = time.NewTicker(HEARTBEAT_INTERVAL)
+
+	for {
+		<-t.heartbeatTicker.C
+		// Send heartbeat, if it fails that means the client diconnected
+		if err := t.sendHeartbeat(); err != nil {
+			log.Printf("Client disconnected: %v", t.conn.LocalAddr().String())
+			close(t.channel)
+			return
+		}
+	}
+}
+
 func (t *Tunnel) handleTcpConnection() {
 	log.Printf("TCP Conn from %s", t.conn.LocalAddr().String())
-	_, err := bufio.NewReader(t.conn).ReadString('\n')
-	if err != nil {
-		log.Fatalf("Failed to read data from TCP conn: %v", err)
-	}
 
 	// Create channel to tunnel request to
 	t.channel = make(chan TunneledRequest)
 
 	// Start goroutine to process tunneled requests
 	go t.processTunneledRequests()
+
+	// Start heartbeat
+	go t.startHeartbeat()
 }
 
 func runMmarServer(tcpPort string, httpPort string) {
@@ -149,7 +201,6 @@ func runMmarServer(tcpPort string, httpPort string) {
 		}
 		for {
 			conn, err := ln.Accept()
-			// defer conn.Close()
 			if err != nil {
 				log.Fatalf("Failed to accept TCP connection: %v", err)
 			}
@@ -164,22 +215,64 @@ func runMmarServer(tcpPort string, httpPort string) {
 	}
 }
 
+func parseTunneledMessage(conn net.Conn) (TunnelMessage, *bufio.Reader) {
+	msgReader := bufio.NewReader(conn)
+	msgPrefix, err := msgReader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			log.Print("Connection to mmar server closed or disconnected. Exiting...")
+			os.Exit(0)
+		}
+
+		if errors.Is(err, net.ErrClosed) {
+			log.Printf("Connection closed.")
+			os.Exit(0)
+		}
+		log.Fatalf("Failed to read data from TCP conn: %v", err)
+	}
+
+	var msgType int
+
+	switch msgPrefix {
+	case "HEARTBEAT\n":
+		log.Printf("Got HEARTBEAT\n")
+		msgType = HEARTBEAT
+	case "REQUEST\n":
+		msgType = REQUEST
+	default:
+		log.Fatalf("Invalid TunnelMessage prefix: %v", msgPrefix)
+	}
+
+	return TunnelMessage{msgType: msgType}, msgReader
+}
+
 func forwardRequestsToLocalhost(conn net.Conn) {
 	fwdClient := &http.Client{}
 	for {
 		// TODO: Handle non-HTTP request data being sent to mmar client gracefully
-		req, err := http.ReadRequest(bufio.NewReader(conn))
-		if err != nil {
-			if errors.Is(err, io.EOF) {
+		tunnelMsg, reader := parseTunneledMessage(conn)
+		var req *http.Request
+		var reqErr error
+		switch tunnelMsg.msgType {
+		case HEARTBEAT:
+			log.Printf("Got HEARTBEAT TUNNEL MESSAGE\n")
+			continue
+		case REQUEST:
+			log.Printf("Got REQUEST TUNNEL MESSAGE\n")
+			req, reqErr = http.ReadRequest(reader)
+		}
+
+		if reqErr != nil {
+			if errors.Is(reqErr, io.EOF) {
 				log.Print("Connection to mmar server closed or disconnected. Exiting...")
 				os.Exit(0)
 			}
 
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(reqErr, net.ErrClosed) {
 				log.Printf("Connection closed.")
 				os.Exit(0)
 			}
-			log.Fatalf("Failed to read data from TCP conn: %v", err)
+			log.Fatalf("Failed to read data from TCP conn: %v", reqErr)
 		}
 
 		// TODO: Extract this into a separate function
@@ -220,8 +313,6 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 	if err != nil {
 		log.Fatalf("Failed to connect to TCP server: %v", err)
 	}
-
-	conn.Write([]byte("Hello from local client!\n"))
 
 	// Start processing requests coming from mmar server, forwarding them to localhost
 	go forwardRequestsToLocalhost(conn)
