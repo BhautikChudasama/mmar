@@ -348,11 +348,11 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 	signal.Notify(sigInt, os.Interrupt)
 
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", tunnelHost, serverTcpPort))
-	defer conn.Close()
-
 	if err != nil {
-		log.Fatalf("Failed to connect to TCP server: %v", err)
+		log.Printf("Could not reach mmar server on: %s:%s \nExiting...", tunnelHost, serverTcpPort)
+		os.Exit(0)
 	}
+	defer conn.Close()
 
 	// Start processing requests coming from mmar server, forwarding them to localhost
 	go forwardRequestsToLocalhost(conn)
