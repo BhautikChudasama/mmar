@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,6 +50,7 @@ type TunneledRequest struct {
 	responseChannel chan TunneledResponse
 	responseWriter  http.ResponseWriter
 	request         *http.Request
+	cancel          context.CancelFunc
 }
 
 type TunneledResponse struct {
@@ -66,6 +68,16 @@ type Tunnel struct {
 type TunnelMessage struct {
 	msgType int
 	msgData []byte
+}
+
+func (t *Tunnel) close() {
+	log.Printf("Client disconnected: %v, closing tunnel...", t.conn.LocalAddr().String())
+	// Stop heartbeat ticker
+	t.heartbeatTicker.Stop()
+	// Close the TunneledRequests channel
+	close(t.channel)
+	// Clear the TunneledRequests channel
+	t.channel = nil
 }
 
 func (t *Tunnel) sendMessage(msgType int, dataBytes []byte) error {
@@ -93,21 +105,35 @@ func (t *Tunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Create response channel for tunneled request
 	respChannel := make(chan TunneledResponse)
 
+	// Check if the tunnel was closed, if so,
+	// send back HTTP response right away
+	if t.channel == nil {
+		w.Write([]byte("Tunnel is closed, cannot connect to mmar client."))
+		return
+	}
+
+	ctx, cancel := context.WithCancel(r.Context())
+
 	// Tunnel the request
 	t.channel <- TunneledRequest{
 		responseChannel: respChannel,
 		responseWriter:  w,
 		request:         r,
+		cancel:          cancel,
 	}
 
-	// Await response for tunneled request
-	resp, _ := <-respChannel
+	select {
+	case <-ctx.Done(): // Tunnel is closed if context is cancelled
+		w.Write([]byte("Tunnel is closed, cannot connect to mmar client."))
+		return
+	case resp, _ := <-respChannel: // Await response for tunneled request
+		// Write response headers with response status code to original client
+		w.WriteHeader(resp.statusCode)
 
-	// Write response headers with response status code to original client
-	w.WriteHeader(resp.statusCode)
+		// Write the response body to original client
+		w.Write(resp.body)
+	}
 
-	// Write the response body to original client
-	w.Write(resp.body)
 }
 
 func (t *Tunnel) processTunneledRequests() {
@@ -135,6 +161,11 @@ func (t *Tunnel) processTunneledRequests() {
 		respReader := bufio.NewReader(t.conn)
 		resp, respErr := http.ReadResponse(respReader, msg.request)
 		if respErr != nil {
+			if errors.Is(respErr, io.ErrUnexpectedEOF) || errors.Is(respErr, net.ErrClosed) {
+				msg.cancel()
+				t.close()
+				return
+			}
 			failedReq := fmt.Sprintf("%s - %s%s", msg.request.Method, html.EscapeString(msg.request.URL.Path), msg.request.URL.RawQuery)
 			log.Fatalf("Failed to return response: %v\n\n for req: %v", respErr, failedReq)
 		}
@@ -167,8 +198,7 @@ func (t *Tunnel) startHeartbeat() {
 		<-t.heartbeatTicker.C
 		// Send heartbeat, if it fails that means the client diconnected
 		if err := t.sendHeartbeat(); err != nil {
-			log.Printf("Client disconnected: %v", t.conn.LocalAddr().String())
-			close(t.channel)
+			t.close()
 			return
 		}
 	}
