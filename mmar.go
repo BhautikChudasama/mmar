@@ -103,22 +103,37 @@ func (t *ClientTunnel) close() {
 	t.outgoingChannel = nil
 }
 
-func (t *Tunnel) sendMessage(tunnelMsg TunnelMessage) error {
-	// TODO: Come up and formalize better protocol for server<->client
-	// TODO: Clean this function up, implement proper serializing/deserializing
-	var messageBytes []byte
-	switch tunnelMsg.msgType {
+func (tm *TunnelMessage) serializeMessage() ([]byte, error) {
+	serializedMsg := [][]byte{}
+
+	// TODO: Come up with more effecient protocol for server<->client
+	// Determine message type to add prefix
+	switch tm.msgType {
 	case HEARTBEAT:
-		messageBytes = bytes.Join([][]byte{[]byte("HEARTBEAT"), []byte(strconv.Itoa(len(tunnelMsg.msgData))), tunnelMsg.msgData}, []byte("\n"))
+		serializedMsg = append(serializedMsg, []byte("HEARTBEAT"))
 	case REQUEST:
-		messageBytes = bytes.Join([][]byte{[]byte("REQUEST"), []byte(strconv.Itoa(len(tunnelMsg.msgData))), tunnelMsg.msgData}, []byte("\n"))
+		serializedMsg = append(serializedMsg, []byte("REQUEST"))
 	case RESPONSE:
-		messageBytes = bytes.Join([][]byte{[]byte("RESPONSE"), []byte(strconv.Itoa(len(tunnelMsg.msgData))), tunnelMsg.msgData}, []byte("\n"))
+		serializedMsg = append(serializedMsg, []byte("RESPONSE"))
 	default:
-		log.Fatalf("Invalid TunnelMessage type: %v:", tunnelMsg.msgType)
+		log.Fatalf("Invalid TunnelMessage type: %v:", tm.msgType)
 	}
 
-	_, err := t.conn.Write(messageBytes)
+	// Add message data bytes length
+	serializedMsg = append(serializedMsg, []byte(strconv.Itoa(len(tm.msgData))))
+	// Add the message data
+	serializedMsg = append(serializedMsg, tm.msgData)
+
+	// Combine all the data separated by new lines
+	return bytes.Join(serializedMsg, []byte("\n")), nil
+}
+
+func (t *Tunnel) sendMessage(tunnelMsg TunnelMessage) error {
+	serializedMsg, serializeErr := tunnelMsg.serializeMessage()
+	if serializeErr != nil {
+		return serializeErr
+	}
+	_, err := t.conn.Write(serializedMsg)
 	return err
 }
 
