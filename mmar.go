@@ -128,16 +128,7 @@ func (tm *TunnelMessage) serializeMessage() ([]byte, error) {
 	return bytes.Join(serializedMsg, []byte("\n")), nil
 }
 
-func (t *Tunnel) sendMessage(tunnelMsg TunnelMessage) error {
-	serializedMsg, serializeErr := tunnelMsg.serializeMessage()
-	if serializeErr != nil {
-		return serializeErr
-	}
-	_, err := t.conn.Write(serializedMsg)
-	return err
-}
-
-func (t *Tunnel) readMessageData(length int, reader *bufio.Reader) []byte {
+func (tm *TunnelMessage) readMessageData(length int, reader *bufio.Reader) []byte {
 	msgData := make([]byte, length)
 
 	if _, err := io.ReadFull(reader, msgData); err != nil {
@@ -147,34 +138,33 @@ func (t *Tunnel) readMessageData(length int, reader *bufio.Reader) []byte {
 	return msgData
 }
 
-func (t *Tunnel) receiveMessage() (TunnelMessage, error) {
-	msgReader := bufio.NewReader(t.conn)
-	msgPrefix, err := msgReader.ReadString('\n')
+func (tm *TunnelMessage) deserializeMessage(reader *bufio.Reader) error {
+	msgPrefix, err := reader.ReadString('\n')
 
 	// TODO: Make this check a method to make it more DRY
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			log.Print("Tunnel connection closed or disconnected. Exiting...")
-			return TunnelMessage{}, err
+			return err
 		}
 
 		if errors.Is(err, net.ErrClosed) {
 			log.Printf("Tunnel connection closed.")
-			return TunnelMessage{}, err
+			return err
 		}
 		log.Fatalf("Failed to read data from TCP conn: %v", err)
 	}
 
-	msgLengthStr, err := msgReader.ReadString('\n')
+	msgLengthStr, err := reader.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			log.Print("Tunnel connection closed or disconnected. Exiting...")
-			return TunnelMessage{}, err
+			return err
 		}
 
 		if errors.Is(err, net.ErrClosed) {
 			log.Printf("Tunnel connection closed.")
-			return TunnelMessage{}, err
+			return err
 		}
 		log.Fatalf("Failed to read data from TCP conn: %v", err)
 	}
@@ -185,7 +175,7 @@ func (t *Tunnel) receiveMessage() (TunnelMessage, error) {
 	}
 
 	var msgType int
-	msgData := t.readMessageData(msgLength, msgReader)
+	msgData := tm.readMessageData(msgLength, reader)
 
 	switch msgPrefix {
 	case "HEARTBEAT\n":
@@ -202,7 +192,30 @@ func (t *Tunnel) receiveMessage() (TunnelMessage, error) {
 		log.Fatalf("Invalid TunnelMessage prefix: %v", msgPrefix)
 	}
 
-	return TunnelMessage{msgType: msgType, msgData: msgData}, nil
+	tm.msgType = msgType
+	tm.msgData = msgData
+
+	return nil
+}
+
+func (t *Tunnel) sendMessage(tunnelMsg TunnelMessage) error {
+	// Serialize tunnel message data
+	serializedMsg, serializeErr := tunnelMsg.serializeMessage()
+	if serializeErr != nil {
+		return serializeErr
+	}
+	_, err := t.conn.Write(serializedMsg)
+	return err
+}
+
+func (t *Tunnel) receiveMessage() (TunnelMessage, error) {
+	msgReader := bufio.NewReader(t.conn)
+
+	// Read and deserialize tunnel message data
+	tunnelMessage := TunnelMessage{}
+	deserializeErr := tunnelMessage.deserializeMessage(msgReader)
+
+	return tunnelMessage, deserializeErr
 }
 
 // TODO: This should probably change and should not have `ClientTunnel` as the receiver
