@@ -27,16 +27,26 @@ const (
 	SERVER_TCP_PORT  = "6673"
 	TUNNEL_HOST      = "https://mmar.dev"
 
-	HEARTBEAT_INTERVAL = 5 * time.Second
-	READ_BUFFER_SIZE   = 10
+	HEARTBEAT_INTERVAL        = 5 * time.Second
+	GRACEFUL_SHUTDOWN_TIMEOUT = 3 * time.Second
+	READ_BUFFER_SIZE          = 10
 )
 
 const (
 	HEARTBEAT = iota + 1
 	REQUEST
 	RESPONSE
-	NO_LOCALHOST
+	CLIENT_DISCONNECT
+	NO_LOCALHOST_RUNNING
 )
+
+var MESSAGE_MAPPING = map[int]string{
+	HEARTBEAT:            "HEARTBEAT",
+	REQUEST:              "REQUEST",
+	RESPONSE:             "RESPONSE",
+	CLIENT_DISCONNECT:    "CLIENT_DISCONNECT",
+	NO_LOCALHOST_RUNNING: "NO_LOCALHOST_RUNNING",
+}
 
 // use mmar like so:
 // server tunnel:
@@ -63,7 +73,7 @@ type OutgoingResponse struct {
 }
 
 type TunnelInterface interface {
-	processTunnelMessages()
+	processTunnelMessages(ctx context.Context)
 }
 
 type Tunnel struct {
@@ -89,18 +99,16 @@ type TunnelMessage struct {
 	msgData []byte
 }
 
-func (t *ClientTunnel) close() {
-	log.Printf("Client disconnected: %v, closing tunnel...", t.conn.LocalAddr().String())
-	// Stop heartbeat ticker
-	t.heartbeatTicker.Stop()
+func (ct *ClientTunnel) close() {
+	log.Printf("Client disconnected: %v, closing tunnel...", ct.conn.LocalAddr().String())
 	// Close the TunneledRequests channel
-	close(t.incomingChannel)
+	close(ct.incomingChannel)
 	// Clear the TunneledRequests channel
-	t.incomingChannel = nil
+	ct.incomingChannel = nil
 	// Close the TunneledResponses channel
-	close(t.outgoingChannel)
+	close(ct.outgoingChannel)
 	// Clear the TunneledResponses channel
-	t.outgoingChannel = nil
+	ct.outgoingChannel = nil
 }
 
 func (tm *TunnelMessage) serializeMessage() ([]byte, error) {
@@ -108,17 +116,13 @@ func (tm *TunnelMessage) serializeMessage() ([]byte, error) {
 
 	// TODO: Come up with more effecient protocol for server<->client
 	// Determine message type to add prefix
-	switch tm.msgType {
-	case HEARTBEAT:
-		serializedMsg = append(serializedMsg, []byte("HEARTBEAT"))
-	case REQUEST:
-		serializedMsg = append(serializedMsg, []byte("REQUEST"))
-	case RESPONSE:
-		serializedMsg = append(serializedMsg, []byte("RESPONSE"))
-	default:
+	msgType := MESSAGE_MAPPING[tm.msgType]
+	if msgType == "" {
 		log.Fatalf("Invalid TunnelMessage type: %v:", tm.msgType)
 	}
 
+	// Add the message type
+	serializedMsg = append(serializedMsg, []byte(msgType))
 	// Add message data bytes length
 	serializedMsg = append(serializedMsg, []byte(strconv.Itoa(len(tm.msgData))))
 	// Add the message data
@@ -144,29 +148,25 @@ func (tm *TunnelMessage) deserializeMessage(reader *bufio.Reader) error {
 	// TODO: Make this check a method to make it more DRY
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			log.Print("Tunnel connection closed or disconnected. Exiting...")
-			return err
+			log.Print("Tunnel connection closed.")
+			return nil
+		} else if errors.Is(err, net.ErrClosed) {
+			log.Print("Tunnel connection disconnected.")
+			return nil
 		}
-
-		if errors.Is(err, net.ErrClosed) {
-			log.Printf("Tunnel connection closed.")
-			return err
-		}
-		log.Fatalf("Failed to read data from TCP conn: %v", err)
+		return err
 	}
 
 	msgLengthStr, err := reader.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			log.Print("Tunnel connection closed or disconnected. Exiting...")
-			return err
+			log.Print("Tunnel connection closed.")
+			return nil
+		} else if errors.Is(err, net.ErrClosed) {
+			log.Print("Tunnel connection disconnected.")
+			return nil
 		}
-
-		if errors.Is(err, net.ErrClosed) {
-			log.Printf("Tunnel connection closed.")
-			return err
-		}
-		log.Fatalf("Failed to read data from TCP conn: %v", err)
+		return err
 	}
 
 	msgLength, err := strconv.Atoi(msgLengthStr[:len(msgLengthStr)-1])
@@ -185,8 +185,10 @@ func (tm *TunnelMessage) deserializeMessage(reader *bufio.Reader) error {
 		msgType = REQUEST
 	case "RESPONSE\n":
 		msgType = RESPONSE
-	case "NO_LOCALHOST\n":
-		msgType = NO_LOCALHOST
+	case "CLIENT_DISCONNECT\n":
+		msgType = CLIENT_DISCONNECT
+	case "NO_LOCALHOST_RUNNING\n":
+		msgType = NO_LOCALHOST_RUNNING
 	default:
 		// TODO: Gracefully handle non-protocol message received
 		log.Fatalf("Invalid TunnelMessage prefix: %v", msgPrefix)
@@ -265,11 +267,6 @@ func (ct *ClientTunnel) processTunneledRequests() {
 			return
 		}
 
-		// TODO: This will need to change/removed once heartbeat is implemented
-		// on the client side
-		// Reset heartbeat ticker when receiving request
-		ct.heartbeatTicker.Reset(HEARTBEAT_INTERVAL)
-
 		// Writing request to buffer to forward it
 		var requestBuff bytes.Buffer
 		incomingReq.request.Write(&requestBuff)
@@ -333,6 +330,10 @@ func (ct *ClientTunnel) processTunnelMessages() {
 		case RESPONSE:
 			log.Printf("Got RESPONSE TUNNEL MESSAGE\n")
 			ct.outgoingChannel <- tunnelMsg
+		case CLIENT_DISCONNECT:
+			log.Printf("Got CLIENT_DISCONNECT TUNNEL MESSAGE\n")
+			ct.close()
+			return
 		}
 	}
 }
@@ -364,10 +365,6 @@ func (ct *ClientTunnel) handleTcpConnection() {
 
 	// Start goroutine to process tunneled requests
 	go ct.processTunneledRequests()
-
-	// TODO: Probably move this to client side
-	// Start heartbeat
-	go ct.startHeartbeat()
 }
 
 func runMmarServer(tcpPort string, httpPort string) {
@@ -464,22 +461,27 @@ func (st *ServerTunnel) handleRequestMessage(tunnelMsg TunnelMessage) {
 	}
 }
 
-func (st *ServerTunnel) processTunnelMessages() {
+func (st *ServerTunnel) processTunnelMessages(ctx context.Context) {
 	for {
-		tunnelMsg, err := st.receiveMessage()
-		if err != nil {
-			log.Fatalf("Failed to receive message from server tunnel: %v", err)
-		}
+		select {
+		case <-ctx.Done(): // Client gracefully shutdown
+			return
+		default:
+			tunnelMsg, err := st.receiveMessage()
+			if err != nil {
+				log.Fatalf("Failed to receive message from server tunnel: %v", err)
+			}
 
-		switch tunnelMsg.msgType {
-		case HEARTBEAT:
-			// TODO: Might want to switch this around to have client send
-			// heartbeats instead of server
-			log.Printf("Got HEARTBEAT TUNNEL MESSAGE\n")
-			continue
-		case REQUEST:
-			log.Printf("Got REQUEST TUNNEL MESSAGE\n")
-			go st.handleRequestMessage(tunnelMsg)
+			switch tunnelMsg.msgType {
+			case HEARTBEAT:
+				// TODO: Might want to switch this around to have client send
+				// heartbeats instead of server
+				log.Printf("Got HEARTBEAT TUNNEL MESSAGE\n")
+				continue
+			case REQUEST:
+				log.Printf("Got REQUEST TUNNEL MESSAGE\n")
+				go st.handleRequestMessage(tunnelMsg)
+			}
 		}
 	}
 }
@@ -497,12 +499,21 @@ func runMmarClient(serverTcpPort string, tunnelHost string) {
 	defer conn.Close()
 	serverTunnel := ServerTunnel{Tunnel{conn: conn}}
 
+	// Create context to cancel running gouroutines when shutting down
+	ctx, cancel := context.WithCancel(context.Background())
+
 	// Process Tunnel Messages coming from mmar server
-	go serverTunnel.processTunnelMessages()
+	go serverTunnel.processTunnelMessages(ctx)
 
 	// Wait for an interrupt signal, if received, terminate gracefully
 	<-sigInt
+
 	log.Printf("Gracefully shutting down client...")
+	disconnectMsg := TunnelMessage{msgType: CLIENT_DISCONNECT}
+	serverTunnel.sendMessage(disconnectMsg)
+	cancel()
+	gracefulShutdownTimer := time.NewTimer(GRACEFUL_SHUTDOWN_TIMEOUT)
+	<-gracefulShutdownTimer.C
 }
 
 func main() {
