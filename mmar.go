@@ -144,28 +144,12 @@ func (tm *TunnelMessage) readMessageData(length int, reader *bufio.Reader) []byt
 
 func (tm *TunnelMessage) deserializeMessage(reader *bufio.Reader) error {
 	msgPrefix, err := reader.ReadString('\n')
-
-	// TODO: Make this check a method to make it more DRY
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Print("Tunnel connection closed.")
-			return nil
-		} else if errors.Is(err, net.ErrClosed) {
-			log.Print("Tunnel connection disconnected.")
-			return nil
-		}
 		return err
 	}
 
 	msgLengthStr, err := reader.ReadString('\n')
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			log.Print("Tunnel connection closed.")
-			return nil
-		} else if errors.Is(err, net.ErrClosed) {
-			log.Print("Tunnel connection disconnected.")
-			return nil
-		}
 		return err
 	}
 
@@ -469,6 +453,13 @@ func (st *ServerTunnel) processTunnelMessages(ctx context.Context) {
 		default:
 			tunnelMsg, err := st.receiveMessage()
 			if err != nil {
+				if errors.Is(err, io.EOF) {
+					log.Print("Tunnel connection closed from Server. Exiting...")
+					os.Exit(0)
+				} else if errors.Is(err, net.ErrClosed) {
+					log.Print("Tunnel connection disconnected from Server. Existing...")
+					os.Exit(0)
+				}
 				log.Fatalf("Failed to receive message from server tunnel: %v", err)
 			}
 
