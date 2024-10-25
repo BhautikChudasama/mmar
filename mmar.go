@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -37,15 +38,15 @@ const (
 	REQUEST
 	RESPONSE
 	CLIENT_DISCONNECT
-	NO_LOCALHOST_RUNNING
+	LOCALHOST_NOT_RUNNING
 )
 
 var MESSAGE_MAPPING = map[int]string{
-	HEARTBEAT:            "HEARTBEAT",
-	REQUEST:              "REQUEST",
-	RESPONSE:             "RESPONSE",
-	CLIENT_DISCONNECT:    "CLIENT_DISCONNECT",
-	NO_LOCALHOST_RUNNING: "NO_LOCALHOST_RUNNING",
+	HEARTBEAT:             "HEARTBEAT",
+	REQUEST:               "REQUEST",
+	RESPONSE:              "RESPONSE",
+	CLIENT_DISCONNECT:     "CLIENT_DISCONNECT",
+	LOCALHOST_NOT_RUNNING: "LOCALHOST_NOT_RUNNING",
 }
 
 // use mmar like so:
@@ -58,6 +59,25 @@ var MESSAGE_MAPPING = map[int]string{
 func invalidSubcommands() {
 	fmt.Println("Add the subcommand 'server' or 'client'")
 	os.Exit(0)
+}
+
+func TunnelErrStateResp(errState int) http.Response {
+	// TODO: Have nicer/more elaborative error messages/pages
+	errStates := map[int]string{
+		CLIENT_DISCONNECT:     "Tunnel is closed, cannot connect to mmar client.",
+		LOCALHOST_NOT_RUNNING: "Tunneled successfully, but nothing is running on localhost.",
+	}
+	errBody := errStates[errState]
+	resp := http.Response{
+		Status:        "200 OK",
+		StatusCode:    200,
+		Proto:         "HTTP/1.0",
+		ProtoMajor:    1,
+		ProtoMinor:    0,
+		Body:          io.NopCloser(bytes.NewBufferString(errBody)),
+		ContentLength: int64(len(errBody)),
+	}
+	return resp
 }
 
 type IncomingRequest struct {
@@ -97,18 +117,6 @@ type ServerTunnel struct {
 type TunnelMessage struct {
 	msgType int
 	msgData []byte
-}
-
-func (ct *ClientTunnel) close() {
-	log.Printf("Client disconnected: %v, closing tunnel...", ct.conn.LocalAddr().String())
-	// Close the TunneledRequests channel
-	close(ct.incomingChannel)
-	// Clear the TunneledRequests channel
-	ct.incomingChannel = nil
-	// Close the TunneledResponses channel
-	close(ct.outgoingChannel)
-	// Clear the TunneledResponses channel
-	ct.outgoingChannel = nil
 }
 
 func (tm *TunnelMessage) serializeMessage() ([]byte, error) {
@@ -171,8 +179,8 @@ func (tm *TunnelMessage) deserializeMessage(reader *bufio.Reader) error {
 		msgType = RESPONSE
 	case "CLIENT_DISCONNECT\n":
 		msgType = CLIENT_DISCONNECT
-	case "NO_LOCALHOST_RUNNING\n":
-		msgType = NO_LOCALHOST_RUNNING
+	case "LOCALHOST_NOT_RUNNING\n":
+		msgType = LOCALHOST_NOT_RUNNING
 	default:
 		// TODO: Gracefully handle non-protocol message received
 		log.Fatalf("Invalid TunnelMessage prefix: %v", msgPrefix)
@@ -204,8 +212,26 @@ func (t *Tunnel) receiveMessage() (TunnelMessage, error) {
 	return tunnelMessage, deserializeErr
 }
 
+func (ct *ClientTunnel) close() {
+	log.Printf("Client disconnected: %v, closing tunnel...", ct.conn.LocalAddr().String())
+	// Close the TunneledRequests channel
+	close(ct.incomingChannel)
+	// Clear the TunneledRequests channel
+	ct.incomingChannel = nil
+	// Close the TunneledResponses channel
+	close(ct.outgoingChannel)
+	// Clear the TunneledResponses channel
+	ct.outgoingChannel = nil
+
+	// Wait a little for final response to complete, then close the connection
+	gracefulCloseTimer := time.NewTimer(GRACEFUL_SHUTDOWN_TIMEOUT)
+	<-gracefulCloseTimer.C
+	ct.conn.Close()
+	log.Printf("Tunnel connection closed: %v", ct.conn.LocalAddr().String())
+}
+
 // TODO: This should probably change and should not have `ClientTunnel` as the receiver
-func (t *ClientTunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (ct *ClientTunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s - %s%s", r.Method, html.EscapeString(r.URL.Path), r.URL.RawQuery)
 
 	// Create response channel for tunneled request
@@ -213,15 +239,19 @@ func (t *ClientTunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check if the tunnel was closed, if so,
 	// send back HTTP response right away
-	if t.incomingChannel == nil {
-		w.Write([]byte("Tunnel is closed, cannot connect to mmar client."))
+	if ct.incomingChannel == nil {
+		// Create a response for Tunnel closed/not connected
+		resp := TunnelErrStateResp(CLIENT_DISCONNECT)
+		w.WriteHeader(resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		w.Write(respBody)
 		return
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
 
 	// Tunnel the request
-	t.incomingChannel <- IncomingRequest{
+	ct.incomingChannel <- IncomingRequest{
 		responseChannel: respChannel,
 		responseWriter:  w,
 		request:         r,
@@ -230,7 +260,11 @@ func (t *ClientTunnel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case <-ctx.Done(): // Tunnel is closed if context is cancelled
-		w.Write([]byte("Tunnel is closed, cannot connect to mmar client."))
+		// Create a response for Tunnel closed/not connected
+		resp := TunnelErrStateResp(CLIENT_DISCONNECT)
+		w.WriteHeader(resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		w.Write(respBody)
 		return
 	case resp, _ := <-respChannel: // Await response for tunneled request
 		// Write response headers with response status code to original client
@@ -277,7 +311,6 @@ func (ct *ClientTunnel) processTunneledRequests() {
 			failedReq := fmt.Sprintf("%s - %s%s", incomingReq.request.Method, html.EscapeString(incomingReq.request.URL.Path), incomingReq.request.URL.RawQuery)
 			log.Fatalf("Failed to return response: %v\n\n for req: %v", respErr, failedReq)
 		}
-		defer resp.Body.Close()
 
 		respBody, respBodyErr := io.ReadAll(resp.Body)
 		if respBodyErr != nil {
@@ -296,6 +329,9 @@ func (ct *ClientTunnel) processTunneledRequests() {
 
 		// Send response back to goroutine handling the request
 		incomingReq.responseChannel <- OutgoingResponse{statusCode: resp.StatusCode, body: respBody}
+
+		// Close response body
+		resp.Body.Close()
 	}
 }
 
@@ -303,7 +339,7 @@ func (ct *ClientTunnel) processTunnelMessages() {
 	for {
 		tunnelMsg, err := ct.receiveMessage()
 		if err != nil {
-			log.Fatalf("Failed to receive message from server tunnel: %v", err)
+			log.Fatalf("Failed to receive message from client tunnel: %v", err)
 		}
 
 		switch tunnelMsg.msgType {
@@ -314,6 +350,14 @@ func (ct *ClientTunnel) processTunnelMessages() {
 		case RESPONSE:
 			log.Printf("Got RESPONSE TUNNEL MESSAGE\n")
 			ct.outgoingChannel <- tunnelMsg
+		case LOCALHOST_NOT_RUNNING:
+			// Create a response for Tunnel connected but localhost not running
+			resp := TunnelErrStateResp(LOCALHOST_NOT_RUNNING)
+			// Writing response to buffer to tunnel it back
+			var responseBuff bytes.Buffer
+			resp.Write(&responseBuff)
+			notRunningMsg := TunnelMessage{msgType: RESPONSE, msgData: responseBuff.Bytes()}
+			ct.outgoingChannel <- notRunningMsg
 		case CLIENT_DISCONNECT:
 			log.Printf("Got CLIENT_DISCONNECT TUNNEL MESSAGE\n")
 			ct.close()
@@ -429,10 +473,15 @@ func (st *ServerTunnel) handleRequestMessage(tunnelMsg TunnelMessage) {
 	log.Printf("%s - %s%s", req.Method, html.EscapeString(req.URL.Path), req.URL.RawQuery)
 	resp, fwdErr := fwdClient.Do(req)
 	if fwdErr != nil {
-		localhostNotRunningMsg := []byte("Tunnel is open but nothing is running on localhost")
-		if _, err := st.conn.Write(localhostNotRunningMsg); err != nil {
-			log.Fatalf("Failed to forward: %v", fwdErr)
+		if errors.Is(fwdErr, syscall.ECONNREFUSED) {
+			localhostNotRunningMsg := TunnelMessage{msgType: LOCALHOST_NOT_RUNNING}
+			if err := st.sendMessage(localhostNotRunningMsg); err != nil {
+				log.Fatal(err)
+			}
+			return
 		}
+
+		log.Fatalf("Failed to forward: %v", fwdErr)
 	}
 
 	// Writing response to buffer to tunnel it back
