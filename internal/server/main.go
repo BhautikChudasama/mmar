@@ -131,10 +131,9 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (ms *MmarServer) GenerateUniqueId() string {
 	reservedIDs := []string{"", "admin", "stats"}
 
-	var randSeed *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	generatedId := ""
 	for _, exists := ms.clients[generatedId]; exists || slices.Contains(reservedIDs, generatedId); {
+		var randSeed *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
 		b := make([]byte, constants.ID_LENGTH)
 		for i := range b {
 			b[i] = constants.ID_CHARSET[randSeed.Intn(len(constants.ID_CHARSET))]
