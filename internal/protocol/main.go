@@ -71,6 +71,13 @@ type TunnelMessage struct {
 	MsgData []byte
 }
 
+// A TunnelMessage is serialized in the following format:
+//
+// +---------+------------+---------------------+------------+-------------------------+
+// | Version | Msg Type   | Length of Msg Data  | Delimiter  | Message Data            |
+// | (1 byte)| (1 byte)   | (1 or more bytes)   | (1 byte)   | (Variable Length)       |
+// +---------+------------+---------------------+------------+-------------------------+
+//
 func (tm *TunnelMessage) serializeMessage() ([]byte, error) {
 	serializedMsg := [][]byte{}
 
