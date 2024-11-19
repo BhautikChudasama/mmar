@@ -96,12 +96,16 @@ func (mc *MmarClient) handleRequestMessage(tunnelMsg protocol.TunnelMessage) {
 }
 
 func (mc *MmarClient) ProcessTunnelMessages(ctx context.Context) {
-	// TODO: Needs to be refactored to pass in the ctx to recieveMessage to cancel the blocking
 	for {
 		select {
 		case <-ctx.Done(): // Client gracefully shutdown
 			return
 		default:
+			// Set read deadline to half the graceful shutdown timeout to
+			// allow detections of graceful shutdowns
+			readDeadline := time.Now().Add((constants.GRACEFUL_SHUTDOWN_TIMEOUT / 2) * time.Second)
+			mc.Tunnel.Conn.SetReadDeadline(readDeadline)
+
 			tunnelMsg, err := mc.ReceiveMessage()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
@@ -110,6 +114,8 @@ func (mc *MmarClient) ProcessTunnelMessages(ctx context.Context) {
 				} else if errors.Is(err, net.ErrClosed) {
 					logger.Log(constants.DEFAULT_COLOR, "Tunnel connection disconnected from Server. Exiting...")
 					os.Exit(0)
+				} else if errors.Is(err, os.ErrDeadlineExceeded) {
+					continue
 				}
 				log.Fatalf("Failed to receive message from server tunnel: %v", err)
 			}
@@ -143,7 +149,11 @@ func Run(config ConfigOptions) {
 	sigInt := make(chan os.Signal, 1)
 	signal.Notify(sigInt, os.Interrupt)
 
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", config.TunnelHost, config.TunnelTcpPort))
+	conn, err := net.DialTimeout(
+		"tcp",
+		fmt.Sprintf("%s:%s", config.TunnelHost, config.TunnelTcpPort),
+		constants.TUNNEL_CREATE_TIMEOUT*time.Second,
+	)
 	if err != nil {
 		logger.Log(
 			constants.DEFAULT_COLOR,
@@ -175,6 +185,6 @@ func Run(config ConfigOptions) {
 	disconnectMsg := protocol.TunnelMessage{MsgType: protocol.CLIENT_DISCONNECT}
 	mmarClient.SendMessage(disconnectMsg)
 	cancel()
-	gracefulShutdownTimer := time.NewTimer(constants.GRACEFUL_SHUTDOWN_TIMEOUT)
+	gracefulShutdownTimer := time.NewTimer(constants.GRACEFUL_SHUTDOWN_TIMEOUT * time.Second)
 	<-gracefulShutdownTimer.C
 }

@@ -1,7 +1,5 @@
 package constants
 
-import "time"
-
 const (
 	MMAR_VERSION = "0.0.0"
 
@@ -30,7 +28,8 @@ const (
 	ID_LENGTH                       = 6
 
 	MAX_TUNNELS_PER_IP        = 5
-	GRACEFUL_SHUTDOWN_TIMEOUT = 3 * time.Second
+	GRACEFUL_SHUTDOWN_TIMEOUT = 3
+	TUNNEL_CREATE_TIMEOUT     = 3
 
 	// TERMINAL ANSI ESCAPED COLORS
 	DEFAULT_COLOR = ""

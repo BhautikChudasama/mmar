@@ -77,7 +77,7 @@ func (ct *ClientTunnel) close(graceful bool) {
 
 	if graceful {
 		// Wait a little for final response to complete, then close the connection
-		gracefulCloseTimer := time.NewTimer(constants.GRACEFUL_SHUTDOWN_TIMEOUT)
+		gracefulCloseTimer := time.NewTimer(constants.GRACEFUL_SHUTDOWN_TIMEOUT * time.Second)
 		<-gracefulCloseTimer.C
 	}
 
@@ -299,7 +299,7 @@ func (ms *MmarServer) handleTcpConnection(conn net.Conn) {
 	go ms.processTunnelMessages(clientTunnel)
 
 	// Start goroutine to process tunneled requests
-	go ms.processTunneledRequests(clientTunnel)
+	go ms.processTunneledRequestsForClient(clientTunnel)
 }
 
 func (ms *MmarServer) closeClientTunnel(ct *ClientTunnel) {
@@ -319,7 +319,7 @@ func (ms *MmarServer) closeClientTunnel(ct *ClientTunnel) {
 	ct.close(true)
 }
 
-func (ms *MmarServer) processTunneledRequests(ct *ClientTunnel) {
+func (ms *MmarServer) processTunneledRequestsForClient(ct *ClientTunnel) {
 	for {
 		// Read requests coming in tunnel channel
 		incomingReq, ok := <-ct.incomingChannel
