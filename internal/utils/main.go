@@ -81,7 +81,7 @@ func ValidCredentials(username string, password string) bool {
 		usernameDecodedHash = defaultUsernameHash[:]
 	}
 
-	// Receive exected Hash for password
+	// Receive expected Hash for password
 	envPasswordHash, foundPasswordHash := os.LookupEnv("PASSWORD_HASH")
 	var passwordDecodedHash []byte
 	if foundPasswordHash {
