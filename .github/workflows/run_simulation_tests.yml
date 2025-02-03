@@ -1,0 +1,24 @@
+
+name: Run Simulation Tests
+
+on:
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.20'
+
+    - name: Build
+      run: go build -o ./simulations/mmar ./cmd/mmar/main.go
+
+    - name: Test
+      run: go test -v ./...
