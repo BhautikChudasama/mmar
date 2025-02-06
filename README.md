@@ -1,6 +1,6 @@
 <p align="center">
     <picture>
-      <img alt="mmar" title="mmar" src="docs/assets/img/mmar-gopher-logo.png">
+      <img alt="mmar" title="mmar" src="./docs/assets/img/mmar-gopher-logo.png">
     </picture>
 </p>
 
