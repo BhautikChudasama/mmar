@@ -45,5 +45,4 @@ release:
 
 dockers:
   - image_templates:
-    - "mmar:{{ .Tag }}"
     - "ghcr.io/yusuf-musleh/mmar:{{ .Tag }}"
