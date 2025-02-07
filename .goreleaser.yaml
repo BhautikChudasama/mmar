@@ -4,12 +4,16 @@ project_name: mmar
 
 builds:
   - main: ./cmd/mmar
+    binary: mmar
     env:
       - CGO_ENABLED=0
     goos:
       - linux
       - windows
       - darwin
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - formats: [ 'tar.gz' ]
@@ -45,4 +49,21 @@ release:
 
 dockers:
   - image_templates:
-    - "ghcr.io/yusuf-musleh/mmar:{{ .Tag }}"
+      - "ghcr.io/yusuf-musleh/mmar:{{ .Tag }}-amd64"
+    use: buildx
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - image_templates:
+      - "ghcr.io/yusuf-musleh/mmar:{{ .Tag }}-arm64"
+    use: buildx
+    goarch: arm64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64/v8"
+
+docker_manifests:
+  - name_template: "ghcr.io/yusuf-musleh/mmar:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/yusuf-musleh/mmar:{{ .Tag }}-amd64"
+      - "ghcr.io/yusuf-musleh/mmar:{{ .Tag }}-arm64"
