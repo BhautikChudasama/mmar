@@ -1,9 +1,5 @@
-FROM golang:1.23
+FROM scratch
 
-# Install gopls for golang LSP
-RUN go install golang.org/x/tools/gopls@latest
+ENTRYPOINT ["/mmar"]
 
-# Install delve for debugging
-RUN go install github.com/go-delve/delve/cmd/dlv@latest
-
-WORKDIR /app
+COPY mmar /

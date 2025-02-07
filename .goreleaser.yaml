@@ -42,3 +42,7 @@ release:
     ---
 
     Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+
+dockers:
+  - image_templates:
+    - "mmar:{{ .Tag }}"
