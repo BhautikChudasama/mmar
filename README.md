@@ -36,7 +36,7 @@ _p.s. mmar means “corridor” or “pass-through” in Arabic._
 Use [Homebrew](https://brew.sh/) to install `mmar` on MacOS:
 
 ```
-brew install mmar
+brew install yusuf-musleh/mmar-tap/mmar
 ```
 
 ### Docker
@@ -64,7 +64,7 @@ Download a [Release](https://github.com/yusuf-musleh/mmar/releases/) from Github
 1. Check that you have `mmar` installed
 
 ```
-$ mmar --version
+$ mmar version
 mmar version 0.1.6
 ```
 1. Make sure you have your localhost server running on some port (eg: 8080)

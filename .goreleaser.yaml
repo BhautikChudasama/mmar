@@ -78,4 +78,4 @@ brews:
     description: mmar is a zero-dependancy, self-hostable, cross-platform HTTP tunnel that exposes your localhost to the world on a public URL.
     license: AGPLv3
     test: |
-      system "#{bin}/mmar --version"
+      system "#{bin}/mmar version"
