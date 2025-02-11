@@ -73,9 +73,9 @@ brews:
       owner: yusuf-musleh
       name: homebrew-mmar-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
-      directory: Formula
-      homepage: "https://mmar.dev"
-      description: mmar is a zero-dependancy, self-hostable, cross-platform HTTP tunnel that exposes your localhost to the world on a public URL.
-      license: AGPLv3
-      test: |
-        system "#{bin}/mmar --version"
+    directory: Formula
+    homepage: "https://mmar.dev"
+    description: mmar is a zero-dependancy, self-hostable, cross-platform HTTP tunnel that exposes your localhost to the world on a public URL.
+    license: AGPLv3
+    test: |
+      system "#{bin}/mmar --version"
