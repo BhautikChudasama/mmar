@@ -39,13 +39,21 @@ Use [Homebrew](https://brew.sh/) to install `mmar` on MacOS:
 brew install mmar
 ```
 
+### Docker
+
+The fastest way to create a tunnel what is running on your `localhost:8080` using [Docker](https://www.docker.com/) is by running this command:
+
+```
+docker run --rm --network host ghcr.io/yusuf-musleh/mmar:v0.1.6 client --local-port 8080
+```
+
 ### Linux
 
-TBD -- see manual installation
+TBD -- see Docker or Manual installation instructions for now
 
 ### Windows
 
-TBD -- see manual installation
+TBD -- see Docker or Manual installation instructions for now
 
 ### Manually
 
@@ -57,7 +65,7 @@ Download a [Release](https://github.com/yusuf-musleh/mmar/releases/) from Github
 
 ```
 $ mmar --version
-mmar version 0.1.0
+mmar version 0.1.6
 ```
 1. Make sure you have your localhost server running on some port (eg: 8080)
 1. Run the `mmar` client, pointing it to your localhost port
@@ -67,15 +75,13 @@ $ mmar client --local-port 8080
 2025/02/02 16:26:54 Starting mmar client...
   Creating tunnel:
     Tunnel Host: mmar.dev
-    Tunnel TCP Port: 6673
-    Tunnel HTTP Port: 3376
     Local Port: 8080
 
 2025/02/02 16:26:54 Tunnel created successfully!
 
 A mmar tunnel is now open on:
 
->>>  http://7v0aye.mmar.dev -> http://localhost:8080
+>>>  https://7v0aye.mmar.dev -> http://localhost:8080
 ```
 1. That's it! Now you have an HTTP tunnel open through `mmar.dev` on a randomly generated unique subdomain
 1. Access this link from anywhere and you should be able to access your localhost server
