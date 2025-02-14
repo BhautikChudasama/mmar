@@ -39,6 +39,12 @@ Use [Homebrew](https://brew.sh/) to install `mmar` on MacOS:
 brew install yusuf-musleh/mmar-tap/mmar
 ```
 
+If you already have it installed and want to update it to the latest release:
+
+```
+brew upgrade yusuf-musleh/mmar-tap/mmar
+```
+
 ### Docker
 
 The fastest way to create a tunnel what is running on your `localhost:8080` using [Docker](https://www.docker.com/) is by running this command:
