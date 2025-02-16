@@ -50,16 +50,16 @@ brew upgrade yusuf-musleh/mmar-tap/mmar
 The fastest way to create a tunnel what is running on your `localhost:8080` using [Docker](https://www.docker.com/) is by running this command:
 
 ```
-docker run --rm --network host ghcr.io/yusuf-musleh/mmar:v0.1.6 client --local-port 8080
+docker run --rm --network host ghcr.io/yusuf-musleh/mmar:v0.2.1 client --local-port 8080
 ```
 
 ### Linux
 
-TBD -- see Docker or Manual installation instructions for now
+See Docker or Manual installation instructions
 
 ### Windows
 
-TBD -- see Docker or Manual installation instructions for now
+See Docker or Manual installation instructions
 
 ### Manually
 
@@ -71,7 +71,7 @@ Download a [Release](https://github.com/yusuf-musleh/mmar/releases/) from Github
 
 ```
 $ mmar version
-mmar version 0.1.6
+mmar version 0.2.1
 ```
 1. Make sure you have your localhost server running on some port (eg: 8080)
 1. Run the `mmar` client, pointing it to your localhost port
@@ -113,7 +113,134 @@ Run `mmar <command> -h` to get help for a specific command
 
 ## Self-Host
 
-TBD
+Since everything is open-source, you can easily self-host mmar on your own infrastructure under your own domain.
+
+To deploy mmar on your own VPS using docker, you can do the following:
+
+1. Make sure you have your VPS already provisioned and have ssh access to it.
+1. Make sure you already own a domain and have the apex domain as well as wildcard subdomains pointing towards your VPS's public IP. It should look something like this:
+
+
+    | Type     | Host    | Value           | TTL    |
+    | -------- | ------- | --------------- | ------ |
+    | A Record | *       | 123.123.123.123 | Auto   |
+    | A Record | @       | 123.123.123.123 | Auto   |
+
+   This would direct all your tunnel subdomains to your VPS for mmar to handle.
+
+1. Next, make sure you have docker installed on your VPS, and create a `compose.yaml` file and add the mmar server as a service:
+
+    ```yaml
+    services:
+      mmar-server:
+        image: "ghcr.io/yusuf-musleh/mmar:v0.2.1" # <----- make sure to use the mmar's latest version
+        restart: unless-stopped
+        command: server
+        environment:
+          - USERNAME_HASH=[YOUR_SHA256_USERNAME_HASH]
+          - PASSWORD_HASH=[YOUR_SHA256_PASSWORD_HASH]
+        ports:
+          - "3376:3376"
+          - "6673:6673"
+    ```
+
+1. Next, we need to also add a reverse proxy, such as [Nginx](https://nginx.org/) or [Caddy](https://caddyserver.com/), so that requests and TCP connections to your domain are routed accordingly. Since the mmar client communicates with the server using TCP, you need to make sure that the reverse proxy supports routing on TCP, and not just HTTP.
+
+    I highly recommend [Caddy](https://caddyserver.com/) as it also handles obtain SSL certificates for your wildcard subdomains automatically for you, in addition to having a Layer4 reverse proxy to route TCP connections. To get this functionality we need to include a few additional Caddy modules, the [layer4 module](github.com/mholt/caddy-l4) as well as the [caddy-dns](https://github.com/caddy-dns) modules that matches your domain registrar, in my case I am using the [namecheap module](https://github.com/caddy-dns/namecheap) in order to automatically handle issue SSL certificates for wildcard subdomains.
+
+    To add those modules you can build a new docker image for Caddy including these modules:
+
+    ```
+    FROM caddy:2.9.1-builder AS builder
+
+    RUN xcaddy build \
+    --with github.com/mholt/caddy-l4 \
+    --with github.com/caddy-dns/namecheap
+
+    FROM caddy:2.9.1
+
+    COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+    ```
+
+    Next we need to configure Caddy for our setup, let's define a `Caddyfile`:
+
+    ```
+    # Layer4 reverse proxy TCP connection to TCP port
+    {
+        layer4 {
+                example.com:6673 {
+                        route {
+                                tls
+                                proxy {
+                                        upstream mmar-server:6673
+                                }
+                        }
+                }
+        }
+    }
+
+    # Redirect to repo page on Github
+    example.com {
+        redir https://github.com/yusuf-musleh/mmar
+    }
+
+    # Reverse proxy HTTP requests to HTTP port
+    *.example.com {
+        reverse_proxy mmar-server:3376
+        tls {
+                resolvers 1.1.1.1
+                dns namecheap {
+                        api_key API_KEY_HERE
+                        user USERNAME_HERE
+                        api_endpoint https://api.namecheap.com/xml.response
+                        client_ip IP_HERE
+                }
+        }
+    }
+    ```
+
+    Now that we have the new Caddy image and we defined out Caddyfile, we just need to update out `compose.yaml` file to start Caddy:
+
+    ```yaml
+    services:
+        caddy:
+            image: custom-caddy:2.9.1
+            restart: unless-stopped
+            ports:
+              - "80:80"
+              - "443:443"
+              - "443:443/udp"
+            volumes:
+              - ./Caddyfile:/etc/caddy/Caddyfile
+              - caddy_data:/data
+              - caddy_config:/config
+        mmar-server:
+            image: "ghcr.io/yusuf-musleh/mmar:v0.2.1" # <----- make sure to use the mmar's latest version
+            restart: unless-stopped
+            command: server
+            environment:
+              - USERNAME_HASH=[YOUR_SHA256_USERNAME_HASH]
+              - PASSWORD_HASH=[YOUR_SHA256_PASSWORD_HASH]
+            ports:
+              - "3376:3376"
+              - "6673:6673"
+
+    volumes:
+        caddy_data:
+        caddy_config:
+
+    ```
+
+    That's it! All you need to do is run `docker compose up -d` and then check the logs to make sure everything is running as expected, `docker compose logs --follow`.
+
+1. To create a tunnel using your self-hosted mmar tunnel run the following command on your local machine:
+
+    ```
+    $ mmar client --tunnel-host example.com --local-port 8080
+    ```
+
+    That should open a mmar tunnel through your self-hosted mmar server pointing towards your `localhost:8080`.
+
 
 ## License
 
