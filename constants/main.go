@@ -1,7 +1,7 @@
 package constants
 
 const (
-	MMAR_VERSION = "0.1.7"
+	MMAR_VERSION = "0.2.0"
 
 	VERSION_CMD       = "version"
 	SERVER_CMD        = "server"
