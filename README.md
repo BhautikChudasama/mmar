@@ -50,7 +50,7 @@ brew upgrade yusuf-musleh/mmar-tap/mmar
 The fastest way to create a tunnel what is running on your `localhost:8080` using [Docker](https://www.docker.com/) is by running this command:
 
 ```
-docker run --rm --network host ghcr.io/yusuf-musleh/mmar:v0.2.1 client --local-port 8080
+docker run --rm --network host ghcr.io/yusuf-musleh/mmar:v0.2.2 client --local-port 8080
 ```
 
 ### Linux
@@ -133,7 +133,7 @@ To deploy mmar on your own VPS using docker, you can do the following:
     ```yaml
     services:
       mmar-server:
-        image: "ghcr.io/yusuf-musleh/mmar:v0.2.1" # <----- make sure to use the mmar's latest version
+        image: "ghcr.io/yusuf-musleh/mmar:v0.2.2" # <----- make sure to use the mmar's latest version
         restart: unless-stopped
         command: server
         environment:
@@ -215,7 +215,7 @@ To deploy mmar on your own VPS using docker, you can do the following:
               - caddy_data:/data
               - caddy_config:/config
         mmar-server:
-            image: "ghcr.io/yusuf-musleh/mmar:v0.2.1" # <----- make sure to use the mmar's latest version
+            image: "ghcr.io/yusuf-musleh/mmar:v0.2.2" # <----- make sure to use the mmar's latest version
             restart: unless-stopped
             command: server
             environment:
