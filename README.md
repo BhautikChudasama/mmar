@@ -1,5 +1,3 @@
-> WARNING: This is still in Alpha stage, not ready for production use yet.
-
 <p align="center">
     <picture>
       <img alt="mmar" title="mmar" src="./docs/assets/img/mmar-gopher-logo.png">
@@ -12,16 +10,28 @@ mmar (pronounced "ma-mar") is a zero-dependancy, self-hostable, cross-platform H
 
 It allows you to quickly share what you are working on locally with others without the hassle of a full deployment, especially if it is not ready to be shipped.
 
-<!-- screenshot/gif of mmar in action -->
+### Demo
+
+<p align="center">
+    <picture>
+      <img alt="mmar" title="mmar" src="./docs/assets/img/mmar-demo.gif">
+    </picture>
+</p>
 
 ### Key Features
 
 - Super simple to use
-- Utilize "mmar.dev" to tunnel for free on a generated subdomain
+- Provides "mmar.dev" to tunnel for free on a generated subdomain
 - Expose multiple ports on different subdomains
 - Live logs of requests coming into your localhost server
 - Zero dependancies
 - Self-host your own mmar server to have full control
+
+### Limitations
+
+- Currently only supports the HTTP protocol, other protocols such as websockets were not tested and will likely not work
+- Requests through mmar are limited to 10mb in size, however this could be made configurable in the future
+- There is a limit of 5 mmar tunnels per IP to avoid abuse, this could also be made configurable in the future
 
 ### Learn More
 
@@ -142,6 +152,20 @@ To deploy mmar on your own VPS using docker, you can do the following:
         ports:
           - "3376:3376"
           - "6673:6673"
+    ```
+
+    The `USERNAME_HASH` and `PASSWORD_HASH` env variables are the hashes of the credentials needed to access the stats page, which can be viewed at `stats.yourdomain.com`. The stats pages returns a json with very basic information about the number of clients connected (i.e. tunnels open) along with a list of the subdomains and when they were created:
+
+    ```json
+    {
+      "connectedClients": [
+        {
+          "createdOn": "2025-03-01T08:01:46Z",
+          "id": "owrwf0"
+        }
+      ],
+      "connectedClientsCount": 1
+    }
     ```
 
 1. Next, we need to also add a reverse proxy, such as [Nginx](https://nginx.org/) or [Caddy](https://caddyserver.com/), so that requests and TCP connections to your domain are routed accordingly. Since the mmar client communicates with the server using TCP, you need to make sure that the reverse proxy supports routing on TCP, and not just HTTP.
