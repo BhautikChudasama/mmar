@@ -6,7 +6,7 @@
 
 # mmar
 
-mmar (pronounced "ma-mar") is a zero-dependancy, self-hostable, cross-platform HTTP tunnel that exposes your localhost to the world on a public URL.
+mmar (pronounced "ma-mar") is a zero-dependency, self-hostable, cross-platform HTTP tunnel that exposes your localhost to the world on a public URL.
 
 It allows you to quickly share what you are working on locally with others without the hassle of a full deployment, especially if it is not ready to be shipped.
 
@@ -24,7 +24,7 @@ It allows you to quickly share what you are working on locally with others witho
 - Provides "mmar.dev" to tunnel for free on a generated subdomain
 - Expose multiple ports on different subdomains
 - Live logs of requests coming into your localhost server
-- Zero dependancies
+- Zero dependencies
 - Self-host your own mmar server to have full control
 
 ### Limitations
