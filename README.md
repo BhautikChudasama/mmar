@@ -46,7 +46,7 @@ _p.s. mmar means “corridor” or “pass-through” in Arabic._
 Install mmar
 
 ```sh
-sudo curl -sSL https://raw.githubusercontent.com/yusuf-musleh/mmar/refs/heads/main/install.sh | sh
+sudo curl -sSL https://raw.githubusercontent.com/yusuf-musleh/mmar/refs/heads/master/install.sh | sh
 ```
 
 ### MacOS (Homebrew)
