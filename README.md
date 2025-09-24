@@ -22,6 +22,7 @@ It allows you to quickly share what you are working on locally with others witho
 
 - Super simple to use
 - Provides "mmar.dev" to tunnel for free on a generated subdomain
+- Custom subdomain names support
 - Expose multiple ports on different subdomains
 - Live logs of requests coming into your localhost server
 - Zero dependencies
@@ -103,6 +104,22 @@ A mmar tunnel is now open on:
 
 >>>  https://7v0aye.mmar.dev -> http://localhost:8080
 ```
+
+You can also specify a custom subdomain name:
+```
+$ mmar client --local-port 8080 --custom-name myapp
+
+2025/02/02 16:26:54 Starting mmar client...
+  Creating tunnel:
+    Tunnel Host: mmar.dev
+    Local Port: 8080
+
+2025/02/02 16:26:54 Tunnel created successfully!
+
+A mmar tunnel is now open on:
+
+>>>  https://myapp.mmar.dev -> http://localhost:8080
+```
 1. That's it! Now you have an HTTP tunnel open through `mmar.dev` on a randomly generated unique subdomain
 1. Access this link from anywhere and you should be able to access your localhost server
 1. You can see all the options `mmar` by running the help command:
@@ -136,6 +153,7 @@ MMAR__LOCAL_PORT           -> mmar client --local-port
 MMAR__TUNNEL_HTTP_PORT     -> mmar client --tunnel-http-port
 MMAR__TUNNEL_TCP_PORT      -> mmar client --tunnel-tcp-port
 MMAR__TUNNEL_HOST          -> mmar client --tunnel-host
+MMAR__CUSTOM_NAME          -> mmar client --custom-name
 ```
 
 ## Self-Host
