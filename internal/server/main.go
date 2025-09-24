@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,7 +67,7 @@ func (ct *ClientTunnel) drainChannels() {
 incomingDrainerLoop:
 	for {
 		select {
-		case incoming, _ := <-ct.incomingChannel:
+		case incoming := <-ct.incomingChannel:
 			// Cancel incoming requests
 			incoming.cancel(CLIENT_DISCONNECTED_ERR)
 		default:
@@ -198,7 +199,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// We could not serialize request, so we cancelled it
 		handleCancel(context.Cause(ctx), w)
 		return
-	case serializedRequest, _ := <-serializedReqChannel:
+	case serializedRequest := <-serializedReqChannel:
 		// Request serialized, we can proceed to tunnel it
 
 		// Create response channel to receive response for tunneled request
@@ -232,7 +233,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			handleCancel(context.Cause(ctx), w)
 			clientTunnel.inflightRequests.Delete(reqId)
 			return
-		case resp, _ := <-respChannel: // Await response for tunneled request
+		case resp := <-respChannel: // Await response for tunneled request
 			// Add header to close the connection
 			w.Header().Set("Connection", "close")
 
@@ -243,6 +244,36 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Write(resp.body)
 		}
 	}
+}
+
+func (ms *MmarServer) isValidSubdomainName(name string) bool {
+	// Check if name is empty
+	if name == "" {
+		return false
+	}
+
+	// reserved subdomains
+	reservedSubdomains := []string{"admin", "stats", "www", "api", "app"}
+	if slices.Contains(reservedSubdomains, strings.ToLower(name)) {
+		return false
+	}
+
+	if len(name) < 1 || len(name) > 63 {
+		return false
+	}
+
+	for _, char := range name {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-') {
+			return false
+		}
+	}
+
+	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
+		return false
+	}
+
+	return true
 }
 
 func (ms *MmarServer) GenerateUniqueSubdomain() string {
@@ -274,8 +305,26 @@ func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string) 
 	var uniqueSubdomain string
 	var msgType uint8
 	if subdomain != "" {
+		// Validate custom subdomain name
+		if !ms.isValidSubdomainName(subdomain) {
+			ms.mu.Unlock()
+			// Send error message to client
+			errorMsg := protocol.TunnelMessage{MsgType: protocol.INVALID_SUBDOMAIN_NAME}
+			tunnel.SendMessage(errorMsg)
+			return nil, errors.New("invalid subdomain name")
+		}
+
+		// Check if subdomain is already taken
+		if _, exists := ms.clients[subdomain]; exists {
+			ms.mu.Unlock()
+			// Send error message to client
+			errorMsg := protocol.TunnelMessage{MsgType: protocol.SUBDOMAIN_ALREADY_TAKEN}
+			tunnel.SendMessage(errorMsg)
+			return nil, errors.New("subdomain already taken")
+		}
+
 		uniqueSubdomain = subdomain
-		msgType = protocol.TUNNEL_RECLAIMED
+		msgType = protocol.TUNNEL_CREATED
 	} else {
 		// Generate unique subdomain for client if not passed in
 		uniqueSubdomain = ms.GenerateUniqueSubdomain()
@@ -334,7 +383,6 @@ func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string) 
 }
 
 func (ms *MmarServer) handleTcpConnection(conn net.Conn) {
-
 	tunnel := protocol.Tunnel{
 		Conn:      conn,
 		CreatedOn: time.Now(),
@@ -483,7 +531,8 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 		switch tunnelMsg.MsgType {
 		case protocol.CREATE_TUNNEL:
 			// mmar client requesting new tunnel
-			ct, err = ms.newClientTunnel(t, "")
+			customName := string(tunnelMsg.MsgData)
+			ct, err = ms.newClientTunnel(t, customName)
 
 			if err != nil {
 				if errors.Is(err, CLIENT_MAX_TUNNELS_REACHED) {

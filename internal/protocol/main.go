@@ -31,6 +31,8 @@ const (
 	HEARTBEAT_FROM_SERVER
 	HEARTBEAT_ACK
 	INVALID_RESP_FROM_DEST
+	INVALID_SUBDOMAIN_NAME
+	SUBDOMAIN_ALREADY_TAKEN
 )
 
 var INVALID_MESSAGE_PROTOCOL_VERSION = errors.New("Invalid Message Protocol Version")
@@ -39,7 +41,7 @@ var INVALID_MESSAGE_TYPE = errors.New("Invalid Tunnel Message Type")
 func isValidTunnelMessageType(mt uint8) (uint8, error) {
 	// Iterate through all the message type, from first to last, checking
 	// if the provided message type matches one of them
-	for msgType := REQUEST; msgType <= INVALID_RESP_FROM_DEST; msgType++ {
+	for msgType := REQUEST; msgType <= SUBDOMAIN_ALREADY_TAKEN; msgType++ {
 		if mt == msgType {
 			return msgType, nil
 		}
@@ -55,6 +57,8 @@ func TunnelErrState(errState uint8) string {
 		LOCALHOST_NOT_RUNNING:  constants.LOCALHOST_NOT_RUNNING_ERR_TEXT,
 		DEST_REQUEST_TIMEDOUT:  constants.DEST_REQUEST_TIMEDOUT_ERR_TEXT,
 		INVALID_RESP_FROM_DEST: constants.READ_RESP_BODY_ERR_TEXT,
+		INVALID_SUBDOMAIN_NAME: constants.INVALID_SUBDOMAIN_NAME_ERR_TEXT,
+		SUBDOMAIN_ALREADY_TAKEN: constants.SUBDOMAIN_ALREADY_TAKEN_ERR_TEXT,
 	}
 	fallbackErr := "An error occured while attempting to tunnel."
 

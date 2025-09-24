@@ -30,6 +30,7 @@ type ConfigOptions struct {
 	TunnelHost     string
 	CustomDns      string
 	CustomCert     string
+	CustomName     string
 }
 
 type MmarClient struct {
@@ -264,6 +265,18 @@ func (mc *MmarClient) ProcessTunnelMessages(ctx context.Context) {
 						limit,
 					))
 				os.Exit(0)
+			case protocol.INVALID_SUBDOMAIN_NAME:
+				logger.Log(
+					constants.RED,
+					"Invalid subdomain name. Subdomain must be 1-63 characters long, contain only alphanumeric characters and hyphens, and cannot start or end with a hyphen.",
+				)
+				os.Exit(0)
+			case protocol.SUBDOMAIN_ALREADY_TAKEN:
+				logger.Log(
+					constants.RED,
+					"Subdomain name is already taken. Please choose a different name.",
+				)
+				os.Exit(0)
 			case protocol.REQUEST:
 				go mc.handleRequestMessage(tunnelMsg)
 			case protocol.HEARTBEAT_ACK:
@@ -317,7 +330,12 @@ func Run(config ConfigOptions) {
 	// Process Tunnel Messages coming from mmar server
 	go mmarClient.ProcessTunnelMessages(ctx)
 
-	createTunnelMsg := protocol.TunnelMessage{MsgType: protocol.CREATE_TUNNEL}
+	// Create tunnel message with custom name if provided
+	var tunnelMsgData []byte
+	if mmarClient.CustomName != "" {
+		tunnelMsgData = []byte(mmarClient.CustomName)
+	}
+	createTunnelMsg := protocol.TunnelMessage{MsgType: protocol.CREATE_TUNNEL, MsgData: tunnelMsgData}
 	if err := mmarClient.SendMessage(createTunnelMsg); err != nil {
 		logger.Log(constants.DEFAULT_COLOR, "Failed to create Tunnel. Exiting...")
 		os.Exit(0)

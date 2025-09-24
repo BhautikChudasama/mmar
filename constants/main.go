@@ -20,6 +20,7 @@ const (
 	MMAR_ENV_VAR_TUNNEL_HOST      = "MMAR__TUNNEL_HOST"
 	MMAR_ENV_VAR_CUSTOM_DNS       = "MMAR__CUSTOM_DNS"
 	MMAR_ENV_VAR_CUSTOM_CERT      = "MMAR__CUSTOM_CERT"
+	MMAR_ENV_VAR_CUSTOM_NAME      = "MMAR__CUSTOM_NAME"
 
 	SERVER_STATS_DEFAULT_USERNAME = "admin"
 	SERVER_STATS_DEFAULT_PASSWORD = "admin"
@@ -33,6 +34,7 @@ const (
 	TUNNEL_HOST_HELP        = "Define host domain of mmar server for client to connect to."
 	CLIENT_CUSTOM_DNS_HELP  = "Define a custom DNS server that the mmar client should use when accessing your local dev server. (eg: 8.8.8.8:53, defaults to DNS in OS)"
 	CLIENT_CUSTOM_CERT_HELP = "Define path to file custom TLS certificate containing complete ASN.1 DER content (certificate, signature algorithm and signature). Currently used for testing, but may be used to allow mmar client to work with a dev server using custom TLS certificate setups. (eg: /path/to/cert)"
+	CLIENT_CUSTOM_NAME_HELP = "Define a custom name for the tunnel subdomain. If not provided, a random subdomain will be generated. (eg: myapp, myproject)"
 
 	TUNNEL_MESSAGE_PROTOCOL_VERSION = 4
 	TUNNEL_MESSAGE_DATA_DELIMITER   = '\n'
@@ -60,6 +62,8 @@ const (
 	MAX_REQ_BODY_SIZE_ERR_TEXT                    = "Request too large"
 	FAILED_TO_FORWARD_TO_MMAR_CLIENT_ERR_TEXT     = "Failed to forward request to mmar client"
 	FAILED_TO_READ_RESP_FROM_MMAR_CLIENT_ERR_TEXT = "Fail to read response from mmad client"
+	INVALID_SUBDOMAIN_NAME_ERR_TEXT               = "Invalid subdomain name. Subdomain must be 1-63 characters long, contain only alphanumeric characters and hyphens, and cannot start or end with a hyphen."
+	SUBDOMAIN_ALREADY_TAKEN_ERR_TEXT              = "Subdomain name is already taken. Please choose a different name."
 
 	// TERMINAL ANSI ESCAPED COLORS
 	DEFAULT_COLOR = ""
