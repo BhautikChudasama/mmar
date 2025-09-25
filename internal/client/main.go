@@ -40,6 +40,7 @@ type MmarClient struct {
 	protocol.Tunnel
 	ConfigOptions
 	subdomain string
+	fwdClient *http.Client // Reusable HTTP client for forwarding requests
 }
 
 func (mc *MmarClient) localizeRequest(request *http.Request) {
@@ -55,58 +56,67 @@ func (mc *MmarClient) localizeRequest(request *http.Request) {
 	request.RequestURI = ""
 }
 
-// Process requests coming from mmar server and forward them to localhost
-func (mc *MmarClient) handleRequestMessage(tunnelMsg protocol.TunnelMessage) {
-	fwdClient := &http.Client{
-		Timeout: constants.DEST_REQUEST_TIMEOUT * time.Second,
-		// Do not follow redirects, let the end-user's client handle it
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+// getForwardingClient returns a reusable HTTP client for forwarding requests
+func (mc *MmarClient) getForwardingClient() *http.Client {
+	if mc.fwdClient == nil {
+		// Create transport with custom DNS if set
+		var transport *http.Transport
+		if mc.CustomDns != "" {
+			r := &net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					return net.Dial("udp", mc.CustomDns)
+				},
+			}
+			dialer := &net.Dialer{
+				Resolver: r,
+			}
+			transport = &http.Transport{
+				DialContext: dialer.DialContext,
+			}
+		} else {
+			transport = &http.Transport{}
+		}
 
-	// Use custom DNS if set
-	if mc.CustomDns != "" {
-		r := &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				return net.Dial("udp", mc.CustomDns)
+		// Configure TLS if custom certificate is provided
+		if mc.CustomCert != "" {
+			certData, certFileErr := os.ReadFile(mc.CustomCert)
+			if certFileErr != nil {
+				logger.Log(
+					constants.RED,
+					fmt.Sprintf(
+						"Could not read certificate from file: %v",
+						certFileErr,
+					))
+				os.Exit(1)
+			}
+
+			cert, certErr := x509.ParseCertificate(certData)
+			if certErr != nil {
+				logger.Log(constants.YELLOW, "Warning: Could not load custom certificate")
+			} else {
+				transport.TLSClientConfig = &tls.Config{
+					RootCAs: x509.NewCertPool(),
+				}
+				transport.TLSClientConfig.RootCAs.AddCert(cert)
+			}
+		}
+
+		mc.fwdClient = &http.Client{
+			Transport: transport,
+			Timeout:   constants.DEST_REQUEST_TIMEOUT * time.Second,
+			// Do not follow redirects, let the end-user's client handle it
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
 			},
 		}
-		dialer := &net.Dialer{
-			Resolver: r,
-		}
-
-		tp := &http.Transport{
-			DialContext: dialer.DialContext,
-		}
-
-		fwdClient.Transport = tp
 	}
+	return mc.fwdClient
+}
 
-	// Use custom TLS certificate if setup
-	if mc.CustomCert != "" {
-		certData, certFileErr := os.ReadFile(mc.CustomCert)
-		if certFileErr != nil {
-			logger.Log(
-				constants.RED,
-				fmt.Sprintf(
-					"Could not read certificate from file: %v",
-					certFileErr,
-				))
-			os.Exit(1)
-		}
-
-		cert, certErr := x509.ParseCertificate(certData)
-		if certErr != nil {
-			logger.Log(constants.YELLOW, "Warning: Could not load custom certificate")
-		} else {
-			fwdClient.Transport.(*http.Transport).TLSClientConfig = &tls.Config{
-				RootCAs: x509.NewCertPool(),
-			}
-			fwdClient.Transport.(*http.Transport).TLSClientConfig.RootCAs.AddCert(cert)
-		}
-	}
+// Process requests coming from mmar server and forward them to localhost
+func (mc *MmarClient) handleRequestMessage(tunnelMsg protocol.TunnelMessage) {
+	fwdClient := mc.getForwardingClient()
 
 	reqReader := bufio.NewReader(bytes.NewReader(tunnelMsg.MsgData))
 
@@ -164,7 +174,10 @@ func (mc *MmarClient) handleRequestMessage(tunnelMsg protocol.TunnelMessage) {
 
 	// Writing response to buffer to tunnel it back
 	var responseBuff bytes.Buffer
-	resp.Write(&responseBuff)
+	if err := resp.Write(&responseBuff); err != nil {
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to write response to buffer: %v", err))
+		return
+	}
 	msgData = append(msgData, responseBuff.Bytes()...)
 	respMessage := protocol.TunnelMessage{MsgType: protocol.RESPONSE, MsgData: msgData}
 	if err := mc.SendMessage(respMessage); err != nil {
@@ -184,15 +197,15 @@ func (mc *MmarClient) reconnectTunnel(ctx context.Context) {
 		logger.Log(constants.DEFAULT_COLOR, "Attempting to reconnect...")
 		conn, err := net.DialTimeout(
 			"tcp",
-			net.JoinHostPort(mc.ConfigOptions.TunnelHost, mc.ConfigOptions.TunnelTcpPort),
+			net.JoinHostPort(mc.TunnelHost, mc.TunnelTcpPort),
 			constants.TUNNEL_CREATE_TIMEOUT*time.Second,
 		)
 		if err != nil {
 			time.Sleep(constants.TUNNEL_RECONNECT_TIMEOUT * time.Second)
 			continue
 		}
-		mc.Tunnel.Conn = conn
-		mc.Tunnel.Reader = bufio.NewReader(conn)
+		mc.Conn = conn
+		mc.Reader = bufio.NewReader(conn)
 
 		// Try to reclaim the same subdomain with auth token
 		reclaimData := mc.subdomain
@@ -227,7 +240,7 @@ func (mc *MmarClient) ProcessTunnelMessages(ctx context.Context) {
 					// Set a read timeout, if no response to heartbeat is recieved within that period,
 					// attempt to reconnect to the server
 					readDeadline := time.Now().Add((constants.READ_DEADLINE * time.Second))
-					mc.Tunnel.Conn.SetReadDeadline(readDeadline)
+					_ = mc.Conn.SetReadDeadline(readDeadline)
 				},
 			)
 
@@ -235,13 +248,13 @@ func (mc *MmarClient) ProcessTunnelMessages(ctx context.Context) {
 			// If a message is received, stop the receiveMessageTimeout and remove the ReadTimeout
 			// as we do not need to send heartbeat or check connection health in this iteration
 			receiveMessageTimeout.Stop()
-			mc.Tunnel.Conn.SetReadDeadline(time.Time{})
+			_ = mc.Conn.SetReadDeadline(time.Time{})
 
 			if err != nil {
 				// If the context was cancelled just return
 				if errors.Is(ctx.Err(), context.Canceled) {
 					return
-				} else if errors.Is(err, protocol.INVALID_MESSAGE_PROTOCOL_VERSION) {
+				} else if errors.Is(err, protocol.ErrInvalidMessageProtocolVersion) {
 					logger.Log(constants.YELLOW, "The mmar message protocol has been updated, please update mmar.")
 					os.Exit(0)
 				}
@@ -341,11 +354,12 @@ func Run(config ConfigOptions) {
 		)
 		os.Exit(0)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	mmarClient := MmarClient{
-		protocol.Tunnel{Conn: conn, Reader: bufio.NewReader(conn)},
-		config,
-		"",
+		Tunnel:        protocol.Tunnel{Conn: conn, Reader: bufio.NewReader(conn)},
+		ConfigOptions: config,
+		subdomain:     "",
+		fwdClient:     nil, // fwdClient will be initialized on first use
 	}
 
 	// Create context to cancel running gouroutines when shutting down
@@ -372,7 +386,7 @@ func Run(config ConfigOptions) {
 
 	logger.Log(constants.YELLOW, "Gracefully shutting down client...")
 	disconnectMsg := protocol.TunnelMessage{MsgType: protocol.CLIENT_DISCONNECT}
-	mmarClient.SendMessage(disconnectMsg)
+	_ = mmarClient.SendMessage(disconnectMsg)
 	cancel()
 	gracefulShutdownTimer := time.NewTimer(constants.GRACEFUL_SHUTDOWN_TIMEOUT * time.Second)
 	<-gracefulShutdownTimer.C

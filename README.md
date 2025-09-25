@@ -188,19 +188,20 @@ MMAR supports authentication using API keys to control tunnel creation and limit
 
 ### Server Configuration
 
-To enable authentication on the server, create an API keys file (YAML format) and specify it when starting the server:
+To enable authentication on the server, create an API keys file (JSON format) and specify it when starting the server:
 
-```yaml
-# api-keys.yaml
-key1: 100
-test-token: 5
-demo-key: 10
+```json
+[
+  { "key": "key1", "limit": 100 },
+  { "key": "test-token", "limit": 5 },
+  { "key": "demo-key", "limit": 10 }
+]
 ```
 
 Start the server with authentication:
 
 ```bash
-$ mmar server --api-keys-file api-keys.yaml
+$ mmar server --api-keys-file api-keys.json
 ```
 
 ### Client Usage
@@ -223,7 +224,7 @@ $ mmar client --local-port 8080 --auth-token key1
 You can configure authentication using environment variables:
 
 ```bash
-export MMAR__API_KEYS_FILE="/path/to/api-keys.yaml"
+export MMAR__API_KEYS_FILE="/path/to/api-keys.json"
 export MMAR__API_KEY="my-secret-token"
 ```
 

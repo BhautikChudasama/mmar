@@ -8,27 +8,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	mathRand "math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yusuf-musleh/mmar/constants"
 )
 
-var READ_BODY_CHUNK_ERR error = errors.New(constants.READ_BODY_CHUNK_ERR_TEXT)
-var READ_BODY_CHUNK_TIMEOUT_ERR error = errors.New(constants.READ_BODY_CHUNK_TIMEOUT_ERR_TEXT)
-var CLIENT_DISCONNECTED_ERR error = errors.New(constants.CLIENT_DISCONNECT_ERR_TEXT)
-var READ_RESP_BODY_ERR error = errors.New(constants.READ_RESP_BODY_ERR_TEXT)
-var MAX_REQ_BODY_SIZE_ERR error = errors.New(constants.MAX_REQ_BODY_SIZE_ERR_TEXT)
-var FAILED_TO_FORWARD_TO_MMAR_CLIENT_ERR error = errors.New(constants.FAILED_TO_FORWARD_TO_MMAR_CLIENT_ERR_TEXT)
-var FAILED_TO_READ_RESP_FROM_MMAR_CLIENT_ERR error = errors.New(constants.FAILED_TO_READ_RESP_FROM_MMAR_CLIENT_ERR_TEXT)
+var (
+	ErrReadBodyChunk                  = errors.New(strings.ToLower(constants.READ_BODY_CHUNK_ERR_TEXT))
+	ErrReadBodyChunkTimeout           = errors.New(strings.ToLower(constants.READ_BODY_CHUNK_TIMEOUT_ERR_TEXT))
+	ErrClientDisconnected             = errors.New(strings.TrimSuffix(strings.ToLower(constants.CLIENT_DISCONNECT_ERR_TEXT), "."))
+	ErrReadRespBody                   = errors.New(strings.TrimSuffix(strings.ToLower(constants.READ_RESP_BODY_ERR_TEXT), "."))
+	ErrMaxReqBodySize                 = errors.New(strings.ToLower(constants.MAX_REQ_BODY_SIZE_ERR_TEXT))
+	ErrFailedToForwardToMmarClient    = errors.New(strings.ToLower(constants.FAILED_TO_FORWARD_TO_MMAR_CLIENT_ERR_TEXT))
+	ErrFailedToReadRespFromMmarClient = errors.New(strings.ToLower(constants.FAILED_TO_READ_RESP_FROM_MMAR_CLIENT_ERR_TEXT))
+)
 
 func respondWith(respText string, w http.ResponseWriter, statusCode int) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(respText)))
 	w.Header().Set("Connection", "close")
 	w.WriteHeader(statusCode)
-	w.Write([]byte(respText))
+	_, _ = w.Write([]byte(respText))
 }
 
 func handleCancel(cause error, w http.ResponseWriter) {
@@ -36,15 +38,15 @@ func handleCancel(cause error, w http.ResponseWriter) {
 	case context.Canceled:
 		// Cancelled, do nothing
 		return
-	case READ_BODY_CHUNK_TIMEOUT_ERR:
+	case ErrReadBodyChunkTimeout:
 		respondWith(cause.Error(), w, http.StatusRequestTimeout)
-	case READ_BODY_CHUNK_ERR, CLIENT_DISCONNECTED_ERR:
+	case ErrReadBodyChunk, ErrClientDisconnected:
 		respondWith(cause.Error(), w, http.StatusBadRequest)
-	case READ_RESP_BODY_ERR:
+	case ErrReadRespBody:
 		respondWith(cause.Error(), w, http.StatusInternalServerError)
-	case MAX_REQ_BODY_SIZE_ERR:
+	case ErrMaxReqBodySize:
 		respondWith(cause.Error(), w, http.StatusRequestEntityTooLarge)
-	case FAILED_TO_FORWARD_TO_MMAR_CLIENT_ERR, FAILED_TO_READ_RESP_FROM_MMAR_CLIENT_ERR:
+	case ErrFailedToForwardToMmarClient, ErrFailedToReadRespFromMmarClient:
 		respondWith(cause.Error(), w, http.StatusServiceUnavailable)
 	}
 }
@@ -56,11 +58,11 @@ func cancelRead(ctx context.Context, cancel context.CancelCauseFunc) {
 	}
 
 	// Cancel request
-	cancel(READ_BODY_CHUNK_TIMEOUT_ERR)
+	cancel(ErrReadBodyChunkTimeout)
 }
 
 // Serialize HTTP request inorder to tunnel it to mmar client
-func serializeRequest(ctx context.Context, r *http.Request, cancel context.CancelCauseFunc, serializedRequestChannel chan []byte) {
+func serializeRequest(ctx context.Context, r *http.Request, cancel context.CancelCauseFunc, serializedRequestChannel chan []byte, maxRequestSize int) {
 	var requestBuff bytes.Buffer
 
 	// Writing & serializing the HTTP Request Line
@@ -90,8 +92,8 @@ func serializeRequest(ctx context.Context, r *http.Request, cancel context.Cance
 		r, readErr := r.Body.Read(buf)
 		readBufferTimeout.Stop()
 		contentLength += r
-		if contentLength > constants.MAX_REQ_BODY_SIZE {
-			cancel(MAX_REQ_BODY_SIZE_ERR)
+		if contentLength > maxRequestSize {
+			cancel(ErrMaxReqBodySize)
 			return
 		}
 		if readErr != nil {
@@ -100,7 +102,7 @@ func serializeRequest(ctx context.Context, r *http.Request, cancel context.Cance
 				break
 			}
 			// Cancel request if there was an error reading
-			cancel(READ_BODY_CHUNK_ERR)
+			cancel(ErrReadBodyChunk)
 			return
 		}
 		reqBodyBytes = append(reqBodyBytes, buf[:r]...)
@@ -110,7 +112,7 @@ func serializeRequest(ctx context.Context, r *http.Request, cancel context.Cance
 	r.Header.Set("Content-Length", strconv.Itoa(contentLength))
 
 	// Serialize headers
-	r.Header.Clone().Write(&requestBuff)
+	_ = r.Header.Clone().Write(&requestBuff)
 
 	// Add new line
 	requestBuff.WriteByte('\n')
@@ -133,17 +135,21 @@ func createSerializedServerResp(status string, statusCode int, body string) byte
 
 	// Writing response to buffer to tunnel it back
 	var responseBuff bytes.Buffer
-	resp.Write(&responseBuff)
+	_ = resp.Write(&responseBuff)
 
 	return responseBuff
 }
 
 // Generate a random ID from ID_CHARSET of length ID_LENGTH
 func GenerateRandomID() string {
-	var randSeed *mathRand.Rand = mathRand.New(mathRand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, constants.ID_LENGTH)
-	for i := range b {
-		b[i] = constants.ID_CHARSET[randSeed.Intn(len(constants.ID_CHARSET))]
+	if _, err := cryptoRand.Read(b); err != nil {
+		// Consider a fallback or panic, but for this use case, a panic is acceptable
+		panic("failed to generate random bytes for subdomain")
+	}
+
+	for i := 0; i < constants.ID_LENGTH; i++ {
+		b[i] = constants.ID_CHARSET[int(b[i])%len(constants.ID_CHARSET)]
 	}
 	return string(b)
 }
@@ -151,6 +157,6 @@ func GenerateRandomID() string {
 // Generate a random 32-bit unsigned integer
 func GenerateRandomUint32() uint32 {
 	var randomUint32 uint32
-	binary.Read(cryptoRand.Reader, binary.BigEndian, &randomUint32)
+	_ = binary.Read(cryptoRand.Reader, binary.BigEndian, &randomUint32)
 	return randomUint32
 }

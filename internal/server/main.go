@@ -27,19 +27,23 @@ import (
 	"github.com/yusuf-musleh/mmar/internal/utils"
 )
 
-var CLIENT_MAX_TUNNELS_REACHED = errors.New("Client reached max tunnels limit")
+var ErrClientMaxTunnelsReached = errors.New("client reached max tunnels limit")
 
 type ConfigOptions struct {
-	HttpPort    string
-	TcpPort     string
-	ApiKeysFile string
+	HttpPort        string
+	TcpPort         string
+	ApiKeysFile     string
+	MaxTunnelsPerIP int
+	MaxRequestSize  int
 }
 
 type MmarServer struct {
-	mu           sync.Mutex
-	clients      map[string]ClientTunnel
-	tunnelsPerIP map[string][]string
-	authManager  *auth.AuthManager
+	mu              sync.Mutex
+	clients         map[string]ClientTunnel
+	tunnelsPerIP    map[string][]string
+	authManager     *auth.AuthManager
+	maxTunnelsPerIP int
+	maxRequestSize  int
 }
 
 type IncomingRequest struct {
@@ -73,7 +77,7 @@ incomingDrainerLoop:
 		select {
 		case incoming := <-ct.incomingChannel:
 			// Cancel incoming requests
-			incoming.cancel(CLIENT_DISCONNECTED_ERR)
+			incoming.cancel(errors.New("client disconnected"))
 		default:
 			// Close the TunneledRequests channel
 			close(ct.incomingChannel)
@@ -100,7 +104,7 @@ func (ct *ClientTunnel) close(graceful bool) {
 		constants.DEFAULT_COLOR,
 		fmt.Sprintf(
 			"[%s] Client disconnected: %v, closing tunnel...",
-			ct.Tunnel.Id,
+			ct.Id,
 			ct.Conn.RemoteAddr().String(),
 		),
 	)
@@ -114,12 +118,12 @@ func (ct *ClientTunnel) close(graceful bool) {
 		<-gracefulCloseTimer.C
 	}
 
-	ct.Conn.Close()
+	_ = ct.Conn.Close()
 	logger.Log(
 		constants.DEFAULT_COLOR,
 		fmt.Sprintf(
 			"[%s] Tunnel connection closed: %v",
-			ct.Tunnel.Id,
+			ct.Id,
 			ct.Conn.RemoteAddr().String(),
 		),
 	)
@@ -163,14 +167,13 @@ func (ms *MmarServer) handleServerStats(w http.ResponseWriter, r *http.Request) 
 
 	// Marshal the result
 	marshalledStats, err := json.Marshal(stats)
-
 	if err != nil {
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to marshal server stats: %v", err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write(marshalledStats)
+	_, _ = w.Write(marshalledStats)
 }
 
 func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +199,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancelCause(r.Context())
 
 	// Writing request to buffer to forward it
-	go serializeRequest(ctx, r, cancel, serializedReqChannel)
+	go serializeRequest(ctx, r, cancel, serializedReqChannel, ms.maxRequestSize)
 
 	select {
 	case <-ctx.Done():
@@ -229,7 +232,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reqMessage := protocol.TunnelMessage{MsgType: protocol.REQUEST, MsgData: reqMsgData}
 		if err := clientTunnel.SendMessage(reqMessage); err != nil {
 			logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send Request msg to client: %v", err))
-			cancel(FAILED_TO_FORWARD_TO_MMAR_CLIENT_ERR)
+			cancel(errors.New("failed to forward to mmar client"))
 		}
 
 		select {
@@ -245,7 +248,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(resp.statusCode)
 
 			// Write the response body to original client
-			w.Write(resp.body)
+			_, _ = w.Write(resp.body)
 		}
 	}
 }
@@ -267,8 +270,8 @@ func (ms *MmarServer) isValidSubdomainName(name string) bool {
 	}
 
 	for _, char := range name {
-		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') || char == '-') {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '-' {
 			return false
 		}
 	}
@@ -299,7 +302,7 @@ func (ms *MmarServer) TunnelLimitedIP(ip string) bool {
 		ms.tunnelsPerIP[ip] = []string{}
 	}
 
-	return len(tunnels) >= constants.MAX_TUNNELS_PER_IP
+	return len(tunnels) >= ms.maxTunnelsPerIP
 }
 
 func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, authToken string) (*ClientTunnel, error) {
@@ -388,12 +391,12 @@ func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, 
 		}
 		// Close write side to signal end of data, but allow client to read the message
 		if tcpConn, ok := tunnel.Conn.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
+			_ = tcpConn.CloseWrite()
 		}
 		clientTunnel.close(false)
 		// Release lock once errored
 		ms.mu.Unlock()
-		return nil, CLIENT_MAX_TUNNELS_REACHED
+		return nil, ErrClientMaxTunnelsReached
 	}
 
 	// Add client tunnel to clients
@@ -432,7 +435,7 @@ func (ms *MmarServer) handleTcpConnection(conn net.Conn) {
 }
 
 func (ms *MmarServer) closeTunnel(t *protocol.Tunnel) {
-	t.Conn.Close()
+	_ = t.Conn.Close()
 }
 
 func (ms *MmarServer) closeClientTunnel(ct *ClientTunnel) {
@@ -458,7 +461,6 @@ func (ms *MmarServer) closeClientTunnel(ct *ClientTunnel) {
 }
 
 func (ms *MmarServer) closeClientTunnelOrConn(ct *ClientTunnel, t protocol.Tunnel) {
-
 	// If client has not reserved subdomain, just close the tcp connection
 	if !ct.ReservedSubdomain() {
 		ms.closeTunnel(&t)
@@ -475,7 +477,7 @@ func (ms *MmarServer) handleResponseMessages(ct *ClientTunnel, tunnelMsg protoco
 	reqIdBuff := make([]byte, constants.REQUEST_ID_BUFF_SIZE)
 	_, err := io.ReadFull(respReader, reqIdBuff)
 	if err != nil {
-		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] - Failed to parse RequestId for response: %v\n", ct.Tunnel.Id, err))
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] - Failed to parse RequestId for response: %v\n", ct.Id, err))
 		return
 	}
 
@@ -483,13 +485,13 @@ func (ms *MmarServer) handleResponseMessages(ct *ClientTunnel, tunnelMsg protoco
 	reqId := RequestId(binary.LittleEndian.Uint32(reqIdBuff))
 	inflight, loaded := ct.inflightRequests.LoadAndDelete(reqId)
 	if !loaded {
-		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to identify inflight request: %v", ct.Tunnel.Id, reqId))
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to identify inflight request: %v", ct.Id, reqId))
 		return
 	}
 
 	inflightRequest, ok := inflight.(IncomingRequest)
 	if !ok {
-		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to parse inflight request: %v", ct.Tunnel.Id, reqId))
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to parse inflight request: %v", ct.Id, reqId))
 		return
 	}
 
@@ -498,24 +500,24 @@ func (ms *MmarServer) handleResponseMessages(ct *ClientTunnel, tunnelMsg protoco
 
 	if respErr != nil {
 		if errors.Is(respErr, io.ErrUnexpectedEOF) || errors.Is(respErr, net.ErrClosed) {
-			inflightRequest.cancel(CLIENT_DISCONNECTED_ERR)
+			inflightRequest.cancel(errors.New("client disconnected"))
 			ms.closeClientTunnel(ct)
 			return
 		}
 		failedReq := fmt.Sprintf("%s - %s%s", inflightRequest.request.Method, html.EscapeString(inflightRequest.request.URL.Path), inflightRequest.request.URL.RawQuery)
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to return response: %v\n\n for req: %v", respErr, failedReq))
-		inflightRequest.cancel(FAILED_TO_READ_RESP_FROM_MMAR_CLIENT_ERR)
+		inflightRequest.cancel(errors.New("failed to read response from mmar client"))
 		return
 	}
 
 	respBody, respBodyErr := io.ReadAll(resp.Body)
 	if respBodyErr != nil {
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to parse response body: %v\n\n", respBodyErr))
-		inflightRequest.cancel(READ_RESP_BODY_ERR)
+		inflightRequest.cancel(errors.New("failed to read response body"))
 		return
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Set headers for response
 	for hKey, hVal := range resp.Header {
@@ -551,7 +553,7 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 				// Set a read timeout, if no response to heartbeat is received within that period,
 				// that means the client has disconnected
 				readDeadline := time.Now().Add((constants.READ_DEADLINE * time.Second))
-				t.Conn.SetReadDeadline(readDeadline)
+				_ = t.Conn.SetReadDeadline(readDeadline)
 			},
 		)
 
@@ -559,7 +561,7 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 		// If a message is received, stop the receiveMessageTimeout and remove the ReadTimeout
 		// as we do not need to send heartbeat or check connection health in this iteration
 		receiveMessageTimeout.Stop()
-		t.Conn.SetReadDeadline(time.Time{})
+		_ = t.Conn.SetReadDeadline(time.Time{})
 
 		if err != nil {
 			logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Receive Message from client tunnel errored: %v", err))
@@ -598,7 +600,7 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 				constants.DEFAULT_COLOR,
 				fmt.Sprintf(
 					"[%s] Tunnel created: %s",
-					ct.Tunnel.Id,
+					ct.Id,
 					t.Conn.RemoteAddr().String(),
 				),
 			)
@@ -710,9 +712,11 @@ func Run(config ConfigOptions) {
 
 	// Initialize Mmar Server
 	mmarServer := MmarServer{
-		clients:      map[string]ClientTunnel{},
-		tunnelsPerIP: map[string][]string{},
-		authManager:  authManager,
+		clients:         map[string]ClientTunnel{},
+		tunnelsPerIP:    map[string][]string{},
+		authManager:     authManager,
+		maxTunnelsPerIP: config.MaxTunnelsPerIP,
+		maxRequestSize:  config.MaxRequestSize,
 	}
 	mux.Handle("/", logger.LoggerMiddleware(&mmarServer))
 
