@@ -67,7 +67,7 @@ func main() {
 	)
 	clientAPIKey := clientCmd.String(
 		"api-key",
-		utils.EnvVarOrDefault(constants.MMAR_ENV_VAR_AUTH_TOKEN, ""),
+		utils.EnvVarOrDefault(constants.MMAR_ENV_VAR_API_KEY, ""),
 		constants.CLIENT_AUTH_TOKEN_HELP,
 	)
 
