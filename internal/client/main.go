@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,7 @@ type ConfigOptions struct {
 	CustomDns      string
 	CustomCert     string
 	CustomName     string
+	APIKey         string
 }
 
 type MmarClient struct {
@@ -192,8 +194,12 @@ func (mc *MmarClient) reconnectTunnel(ctx context.Context) {
 		mc.Tunnel.Conn = conn
 		mc.Tunnel.Reader = bufio.NewReader(conn)
 
-		// Try to reclaim the same subdomain
-		reclaimTunnelMsg := protocol.TunnelMessage{MsgType: protocol.RECLAIM_TUNNEL, MsgData: []byte(mc.subdomain)}
+		// Try to reclaim the same subdomain with auth token
+		reclaimData := mc.subdomain
+		if mc.APIKey != "" {
+			reclaimData = mc.subdomain + "|" + mc.APIKey
+		}
+		reclaimTunnelMsg := protocol.TunnelMessage{MsgType: protocol.RECLAIM_TUNNEL, MsgData: []byte(reclaimData)}
 		if err := mc.SendMessage(reclaimTunnelMsg); err != nil {
 			logger.Log(constants.DEFAULT_COLOR, "Tunnel failed to reconnect. Exiting...")
 			os.Exit(0)
@@ -277,6 +283,24 @@ func (mc *MmarClient) ProcessTunnelMessages(ctx context.Context) {
 					"Subdomain name is already taken. Please choose a different name.",
 				)
 				os.Exit(0)
+			case protocol.AUTH_TOKEN_REQUIRED:
+				logger.Log(
+					constants.RED,
+					"Authentication token is required to create tunnels.",
+				)
+				os.Exit(0)
+			case protocol.AUTH_TOKEN_INVALID:
+				logger.Log(
+					constants.RED,
+					"Invalid authentication token provided.",
+				)
+				os.Exit(0)
+			case protocol.AUTH_TOKEN_LIMIT_EXCEEDED:
+				logger.Log(
+					constants.RED,
+					"Tunnel limit exceeded for this authentication token.",
+				)
+				os.Exit(0)
 			case protocol.REQUEST:
 				go mc.handleRequestMessage(tunnelMsg)
 			case protocol.HEARTBEAT_ACK:
@@ -330,10 +354,12 @@ func Run(config ConfigOptions) {
 	// Process Tunnel Messages coming from mmar server
 	go mmarClient.ProcessTunnelMessages(ctx)
 
-	// Create tunnel message with custom name if provided
+	// Create tunnel message with custom name and auth token if provided
 	var tunnelMsgData []byte
-	if mmarClient.CustomName != "" {
-		tunnelMsgData = []byte(mmarClient.CustomName)
+	if mmarClient.CustomName != "" || mmarClient.APIKey != "" {
+		// Format: "customName|authToken" (use | as delimiter)
+		msgParts := []string{mmarClient.CustomName, mmarClient.APIKey}
+		tunnelMsgData = []byte(strings.Join(msgParts, "|"))
 	}
 	createTunnelMsg := protocol.TunnelMessage{MsgType: protocol.CREATE_TUNNEL, MsgData: tunnelMsgData}
 	if err := mmarClient.SendMessage(createTunnelMsg); err != nil {

@@ -164,6 +164,7 @@ func LogStartMmarClient(tunnelHost string, tunnelTcpPort string, tunnelHttpPort 
 }
 
 func LogTunnelCreated(subdomain string, tunnelHost string, tunnelHttpPort string, localPort string) {
+	fmt.Println(subdomain, tunnelHost, tunnelHttpPort, localPort)
 	logStr := `%s
 
 A mmar tunnel is now open on:

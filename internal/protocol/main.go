@@ -33,6 +33,9 @@ const (
 	INVALID_RESP_FROM_DEST
 	INVALID_SUBDOMAIN_NAME
 	SUBDOMAIN_ALREADY_TAKEN
+	AUTH_TOKEN_REQUIRED
+	AUTH_TOKEN_INVALID
+	AUTH_TOKEN_LIMIT_EXCEEDED
 )
 
 var INVALID_MESSAGE_PROTOCOL_VERSION = errors.New("Invalid Message Protocol Version")
@@ -41,7 +44,7 @@ var INVALID_MESSAGE_TYPE = errors.New("Invalid Tunnel Message Type")
 func isValidTunnelMessageType(mt uint8) (uint8, error) {
 	// Iterate through all the message type, from first to last, checking
 	// if the provided message type matches one of them
-	for msgType := REQUEST; msgType <= SUBDOMAIN_ALREADY_TAKEN; msgType++ {
+	for msgType := REQUEST; msgType <= AUTH_TOKEN_LIMIT_EXCEEDED; msgType++ {
 		if mt == msgType {
 			return msgType, nil
 		}
@@ -53,12 +56,15 @@ func isValidTunnelMessageType(mt uint8) (uint8, error) {
 func TunnelErrState(errState uint8) string {
 	// TODO: Have nicer/more elaborative error messages/pages
 	errStates := map[uint8]string{
-		CLIENT_DISCONNECT:      constants.CLIENT_DISCONNECT_ERR_TEXT,
-		LOCALHOST_NOT_RUNNING:  constants.LOCALHOST_NOT_RUNNING_ERR_TEXT,
-		DEST_REQUEST_TIMEDOUT:  constants.DEST_REQUEST_TIMEDOUT_ERR_TEXT,
-		INVALID_RESP_FROM_DEST: constants.READ_RESP_BODY_ERR_TEXT,
-		INVALID_SUBDOMAIN_NAME: constants.INVALID_SUBDOMAIN_NAME_ERR_TEXT,
-		SUBDOMAIN_ALREADY_TAKEN: constants.SUBDOMAIN_ALREADY_TAKEN_ERR_TEXT,
+		CLIENT_DISCONNECT:         constants.CLIENT_DISCONNECT_ERR_TEXT,
+		LOCALHOST_NOT_RUNNING:     constants.LOCALHOST_NOT_RUNNING_ERR_TEXT,
+		DEST_REQUEST_TIMEDOUT:     constants.DEST_REQUEST_TIMEDOUT_ERR_TEXT,
+		INVALID_RESP_FROM_DEST:    constants.READ_RESP_BODY_ERR_TEXT,
+		INVALID_SUBDOMAIN_NAME:    constants.INVALID_SUBDOMAIN_NAME_ERR_TEXT,
+		SUBDOMAIN_ALREADY_TAKEN:   constants.SUBDOMAIN_ALREADY_TAKEN_ERR_TEXT,
+		AUTH_TOKEN_REQUIRED:       constants.AUTH_TOKEN_REQUIRED_ERR_TEXT,
+		AUTH_TOKEN_INVALID:        constants.AUTH_TOKEN_INVALID_ERR_TEXT,
+		AUTH_TOKEN_LIMIT_EXCEEDED: constants.AUTH_TOKEN_LIMIT_EXCEEDED_ERR_TEXT,
 	}
 	fallbackErr := "An error occured while attempting to tunnel."
 

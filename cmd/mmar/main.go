@@ -23,6 +23,11 @@ func main() {
 		utils.EnvVarOrDefault(constants.MMAR_ENV_VAR_SERVER_TCP_PORT, constants.SERVER_TCP_PORT),
 		constants.SERVER_TCP_PORT_HELP,
 	)
+	serverApiKeysFile := serverCmd.String(
+		"api-keys-file",
+		utils.EnvVarOrDefault(constants.MMAR_ENV_VAR_API_KEYS_FILE, "api-keys.json"),
+		constants.SERVER_API_KEYS_FILE_HELP,
+	)
 
 	clientCmd := flag.NewFlagSet(constants.CLIENT_CMD, flag.ExitOnError)
 	clientLocalPort := clientCmd.String(
@@ -60,6 +65,11 @@ func main() {
 		utils.EnvVarOrDefault(constants.MMAR_ENV_VAR_CUSTOM_NAME, ""),
 		constants.CLIENT_CUSTOM_NAME_HELP,
 	)
+	clientAPIKey := clientCmd.String(
+		"api-key",
+		utils.EnvVarOrDefault(constants.MMAR_ENV_VAR_AUTH_TOKEN, ""),
+		constants.CLIENT_AUTH_TOKEN_HELP,
+	)
 
 	versionCmd := flag.NewFlagSet(constants.VERSION_CMD, flag.ExitOnError)
 	versionCmd.Usage = utils.MmarVersionUsage
@@ -75,8 +85,9 @@ func main() {
 	case constants.SERVER_CMD:
 		serverCmd.Parse(os.Args[2:])
 		mmarServerConfig := server.ConfigOptions{
-			HttpPort: *serverHttpPort,
-			TcpPort:  *serverTcpPort,
+			HttpPort:    *serverHttpPort,
+			TcpPort:     *serverTcpPort,
+			ApiKeysFile: *serverApiKeysFile,
 		}
 		server.Run(mmarServerConfig)
 	case constants.CLIENT_CMD:
@@ -89,6 +100,7 @@ func main() {
 			CustomDns:      *clientCustomDns,
 			CustomCert:     *clientCustomCert,
 			CustomName:     *clientCustomName,
+			APIKey:         *clientAPIKey,
 		}
 		client.Run(mmarClientConfig)
 	case constants.VERSION_CMD:
