@@ -12,23 +12,27 @@ const (
 	TUNNEL_HOST       = "mmar.dev"
 	TUNNEL_HTTP_PORT  = "443"
 
-	MMAR_ENV_VAR_SERVER_HTTP_PORT = "MMAR__SERVER_HTTP_PORT"
-	MMAR_ENV_VAR_SERVER_TCP_PORT  = "MMAR__SERVER_TCP_PORT"
-	MMAR_ENV_VAR_LOCAL_PORT       = "MMAR__LOCAL_PORT"
-	MMAR_ENV_VAR_TUNNEL_HTTP_PORT = "MMAR__TUNNEL_HTTP_PORT"
-	MMAR_ENV_VAR_TUNNEL_TCP_PORT  = "MMAR__TUNNEL_TCP_PORT"
-	MMAR_ENV_VAR_TUNNEL_HOST      = "MMAR__TUNNEL_HOST"
-	MMAR_ENV_VAR_CUSTOM_DNS       = "MMAR__CUSTOM_DNS"
-	MMAR_ENV_VAR_CUSTOM_CERT      = "MMAR__CUSTOM_CERT"
-	MMAR_ENV_VAR_CUSTOM_NAME      = "MMAR__CUSTOM_NAME"
-	MMAR_ENV_VAR_API_KEY          = "MMAR__API_KEY"
-	MMAR_ENV_VAR_API_KEYS_FILE    = "MMAR__API_KEYS_FILE"
+	MMAR_ENV_VAR_SERVER_HTTP_PORT   = "MMAR__SERVER_HTTP_PORT"
+	MMAR_ENV_VAR_SERVER_TCP_PORT    = "MMAR__SERVER_TCP_PORT"
+	MMAR_ENV_VAR_LOCAL_PORT         = "MMAR__LOCAL_PORT"
+	MMAR_ENV_VAR_TUNNEL_HTTP_PORT   = "MMAR__TUNNEL_HTTP_PORT"
+	MMAR_ENV_VAR_TUNNEL_TCP_PORT    = "MMAR__TUNNEL_TCP_PORT"
+	MMAR_ENV_VAR_TUNNEL_HOST        = "MMAR__TUNNEL_HOST"
+	MMAR_ENV_VAR_CUSTOM_DNS         = "MMAR__CUSTOM_DNS"
+	MMAR_ENV_VAR_CUSTOM_CERT        = "MMAR__CUSTOM_CERT"
+	MMAR_ENV_VAR_CUSTOM_NAME        = "MMAR__CUSTOM_NAME"
+	MMAR_ENV_VAR_API_KEY            = "MMAR__API_KEY"
+	MMAR_ENV_VAR_API_KEYS_FILE      = "MMAR__API_KEYS_FILE"
+	MMAR_ENV_VAR_MAX_TUNNELS_PER_IP = "MMAR__SERVER_MAX_TUNNELS_PER_IP"
+	MMAR_ENV_VAR_MAX_REQUEST_SIZE   = "MMAR__SERVER_MAX_REQUEST_SIZE"
 
 	SERVER_STATS_DEFAULT_USERNAME = "admin"
 	SERVER_STATS_DEFAULT_PASSWORD = "admin"
 
-	SERVER_HTTP_PORT_HELP = "Define port where mmar will bind to and run on server for HTTP requests."
-	SERVER_TCP_PORT_HELP  = "Define port where mmar will bind to and run on server for TCP connections."
+	SERVER_HTTP_PORT_HELP          = "Define port where mmar will bind to and run on server for HTTP requests."
+	SERVER_TCP_PORT_HELP           = "Define port where mmar will bind to and run on server for TCP connections."
+	SERVER_MAX_TUNNELS_PER_IP_HELP = "Define maximum number of tunnels allowed per IP address."
+	SERVER_MAX_REQUEST_SIZE_HELP   = "Define maximum request body size in bytes."
 
 	CLIENT_LOCAL_PORT_HELP    = "Define the port where your local dev server is running to expose through mmar."
 	CLIENT_HTTP_PORT_HELP     = "Define port of mmar HTTP server to make requests through the tunnel."
@@ -81,10 +85,8 @@ const (
 	RESET         = "\033[0m"
 )
 
-var (
-	MMAR_SUBCOMMANDS = [][]string{
-		{"server", "Runs a mmar server. Run this on your publicly reachable server if you're self-hosting mmar."},
-		{"client", "Runs a mmar client. Run this on your machine to expose your localhost on a public URL."},
-		{"version", "Prints the installed version of mmar."},
-	}
-)
+var MMAR_SUBCOMMANDS = [][]string{
+	{"server", "Runs a mmar server. Run this on your publicly reachable server if you're self-hosting mmar."},
+	{"client", "Runs a mmar client. Run this on your machine to expose your localhost on a public URL."},
+	{"version", "Prints the installed version of mmar."},
+}

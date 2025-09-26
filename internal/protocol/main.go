@@ -36,21 +36,30 @@ const (
 	AUTH_TOKEN_REQUIRED
 	AUTH_TOKEN_INVALID
 	AUTH_TOKEN_LIMIT_EXCEEDED
+	// Streaming message types
+	REQUEST_STREAM_START
+	REQUEST_STREAM_DATA
+	REQUEST_STREAM_END
+	RESPONSE_STREAM_START
+	RESPONSE_STREAM_DATA
+	RESPONSE_STREAM_END
 )
 
-var INVALID_MESSAGE_PROTOCOL_VERSION = errors.New("Invalid Message Protocol Version")
-var INVALID_MESSAGE_TYPE = errors.New("Invalid Tunnel Message Type")
+var (
+	ErrInvalidMessageProtocolVersion = errors.New("invalid message protocol version")
+	ErrInvalidMessageType            = errors.New("invalid tunnel message type")
+)
 
 func isValidTunnelMessageType(mt uint8) (uint8, error) {
 	// Iterate through all the message type, from first to last, checking
 	// if the provided message type matches one of them
-	for msgType := REQUEST; msgType <= AUTH_TOKEN_LIMIT_EXCEEDED; msgType++ {
+	for msgType := REQUEST; msgType <= RESPONSE_STREAM_END; msgType++ {
 		if mt == msgType {
 			return msgType, nil
 		}
 	}
 
-	return 0, INVALID_MESSAGE_TYPE
+	return 0, ErrInvalidMessageType
 }
 
 func TunnelErrState(errState uint8) string {
@@ -81,7 +90,7 @@ func RespondTunnelErr(errState uint8, w http.ResponseWriter) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(errBody)))
 	w.Header().Set("Connection", "close")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(errBody))
+	_, _ = w.Write([]byte(errBody))
 }
 
 type Tunnel struct {
@@ -106,7 +115,7 @@ type TunnelMessage struct {
 // | Version | Msg Type   | Length of Msg Data  | Delimiter  | Message Data            |
 // | (1 byte)| (1 byte)   | (1 or more bytes)   | (1 byte)   | (Variable Length)       |
 // +---------+------------+---------------------+------------+-------------------------+
-func (tm *TunnelMessage) serializeMessage() ([]byte, error) {
+func (tm *TunnelMessage) SerializeMessage() ([]byte, error) {
 	serializedMsg := [][]byte{}
 
 	// Determine and validate message type to add prefix
@@ -154,7 +163,7 @@ func (tm *TunnelMessage) deserializeMessage(reader *bufio.Reader) error {
 
 	// Check if the message protocol version is correct
 	if uint8(msgProtocolVersion) != constants.TUNNEL_MESSAGE_PROTOCOL_VERSION {
-		return INVALID_MESSAGE_PROTOCOL_VERSION
+		return ErrInvalidMessageProtocolVersion
 	}
 
 	msgPrefix, err := reader.ReadByte()
@@ -180,6 +189,12 @@ func (tm *TunnelMessage) deserializeMessage(reader *bufio.Reader) error {
 		return err
 	}
 
+	// Validate message length to prevent DoS attacks
+	const maxMessageSize = constants.MAX_REQ_BODY_SIZE + 16*1024 // 10MB + 16KB overhead
+	if msgLength < 0 || msgLength > maxMessageSize {
+		return fmt.Errorf("message length %d is invalid or exceeds maximum allowed size", msgLength)
+	}
+
 	msgData, readErr := tm.readMessageData(msgLength, reader)
 	if readErr != nil {
 		return readErr
@@ -197,7 +212,7 @@ func (t *Tunnel) ReservedSubdomain() bool {
 
 func (t *Tunnel) SendMessage(tunnelMsg TunnelMessage) error {
 	// Serialize tunnel message data
-	serializedMsg, serializeErr := tunnelMsg.serializeMessage()
+	serializedMsg, serializeErr := tunnelMsg.SerializeMessage()
 	if serializeErr != nil {
 		return serializeErr
 	}

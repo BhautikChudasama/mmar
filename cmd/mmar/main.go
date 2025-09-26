@@ -28,6 +28,16 @@ func main() {
 		utils.EnvVarOrDefault(constants.MMAR_ENV_VAR_API_KEYS_FILE, "api-keys.json"),
 		constants.SERVER_API_KEYS_FILE_HELP,
 	)
+	serverMaxTunnelsPerIP := serverCmd.Int(
+		"max-tunnels-per-ip",
+		utils.EnvVarOrDefaultInt(constants.MMAR_ENV_VAR_MAX_TUNNELS_PER_IP, constants.MAX_TUNNELS_PER_IP),
+		constants.SERVER_MAX_TUNNELS_PER_IP_HELP,
+	)
+	serverMaxRequestSize := serverCmd.Int(
+		"max-request-size",
+		utils.EnvVarOrDefaultInt(constants.MMAR_ENV_VAR_MAX_REQUEST_SIZE, constants.MAX_REQ_BODY_SIZE),
+		constants.SERVER_MAX_REQUEST_SIZE_HELP,
+	)
 
 	clientCmd := flag.NewFlagSet(constants.CLIENT_CMD, flag.ExitOnError)
 	clientLocalPort := clientCmd.String(
@@ -83,15 +93,23 @@ func main() {
 
 	switch os.Args[1] {
 	case constants.SERVER_CMD:
-		serverCmd.Parse(os.Args[2:])
+		if err := serverCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing server command flags: %v\n", err)
+			os.Exit(1)
+		}
 		mmarServerConfig := server.ConfigOptions{
-			HttpPort:    *serverHttpPort,
-			TcpPort:     *serverTcpPort,
-			ApiKeysFile: *serverApiKeysFile,
+			HttpPort:        *serverHttpPort,
+			TcpPort:         *serverTcpPort,
+			ApiKeysFile:     *serverApiKeysFile,
+			MaxTunnelsPerIP: *serverMaxTunnelsPerIP,
+			MaxRequestSize:  *serverMaxRequestSize,
 		}
 		server.Run(mmarServerConfig)
 	case constants.CLIENT_CMD:
-		clientCmd.Parse(os.Args[2:])
+		if err := clientCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing client command flags: %v\n", err)
+			os.Exit(1)
+		}
 		mmarClientConfig := client.ConfigOptions{
 			LocalPort:      *clientLocalPort,
 			TunnelHttpPort: *clientTunnelHttpPort,
@@ -104,7 +122,10 @@ func main() {
 		}
 		client.Run(mmarClientConfig)
 	case constants.VERSION_CMD:
-		versionCmd.Parse(os.Args[2:])
+		if err := versionCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing version command flags: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println("mmar version", constants.MMAR_VERSION)
 	default:
 		utils.MmarUsage()

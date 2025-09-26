@@ -73,7 +73,6 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 			"reqQueryParams": r.URL.Query(),
 		},
 	})
-
 	if err != nil {
 		log.Fatalf("Failed to marshal response for GET: %v", err)
 	}
@@ -83,7 +82,7 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 	// propograte when going through mmar
 	w.Header().Set("Simulation-Header", "devserver-handle-get")
 	w.WriteHeader(http.StatusOK)
-	w.Write(respBody)
+	_, _ = w.Write(respBody)
 }
 
 func handleGetFail(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +94,6 @@ func handleGetFail(w http.ResponseWriter, r *http.Request) {
 			"reqHeaders": r.Header,
 		},
 	})
-
 	if err != nil {
 		log.Fatalf("Failed to marshal response for GET: %v", err)
 	}
@@ -105,7 +103,7 @@ func handleGetFail(w http.ResponseWriter, r *http.Request) {
 	// propograte when going through mmar
 	w.Header().Set("Simulation-Header", "devserver-handle-get-fail")
 	w.WriteHeader(http.StatusBadRequest)
-	w.Write(respBody)
+	_, _ = w.Write(respBody)
 }
 
 func handlePost(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +125,6 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 			"reqBody":    reqBody,
 		},
 	})
-
 	if err != nil {
 		log.Fatalf("Failed to marshal response for POST: %v", err)
 	}
@@ -138,7 +135,7 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 	// propograte when going through mmar
 	w.Header().Set("Simulation-Header", "devserver-handle-post-success")
 	w.WriteHeader(http.StatusOK)
-	w.Write(respBody)
+	_, _ = w.Write(respBody)
 }
 
 func handlePostFail(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +155,6 @@ func handlePostFail(w http.ResponseWriter, r *http.Request) {
 			"reqBody":    reqBody,
 		},
 	})
-
 	if err != nil {
 		log.Fatalf("Failed to marshal response for GET: %v", err)
 	}
@@ -168,7 +164,7 @@ func handlePostFail(w http.ResponseWriter, r *http.Request) {
 	// propograte when going through mmar
 	w.Header().Set("Simulation-Header", "devserver-handle-post-fail")
 	w.WriteHeader(http.StatusBadRequest)
-	w.Write(respBody)
+	_, _ = w.Write(respBody)
 }
 
 // Request handler that returns a redirect
@@ -192,13 +188,13 @@ func handleBadResp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Hijacking failed", http.StatusInternalServerError)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send back an invalid HTTP response
-	buf.WriteString("some random string\r\n" +
+	_, _ = buf.WriteString("some random string\r\n" +
 		"\r\n" +
 		"that is not a valid http resp")
-	buf.Flush()
+	_ = buf.Flush()
 }
 
 // Request handler that takes a long time before returning response
@@ -211,7 +207,6 @@ func handleLongRunningReq(w http.ResponseWriter, r *http.Request) {
 			"reqHeaders": r.Header,
 		},
 	})
-
 	if err != nil {
 		log.Fatalf("Failed to marshal response for GET: %v", err)
 	}
@@ -224,7 +219,7 @@ func handleLongRunningReq(w http.ResponseWriter, r *http.Request) {
 	// propograte when going through mmar
 	w.Header().Set("Simulation-Header", "devserver-handle-long-running")
 	w.WriteHeader(http.StatusOK)
-	w.Write(respBody)
+	_, _ = w.Write(respBody)
 }
 
 // Request handler that crashes the dev server

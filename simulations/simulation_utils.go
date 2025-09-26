@@ -18,11 +18,6 @@ import (
 	"github.com/yusuf-musleh/mmar/simulations/dnsserver"
 )
 
-type receivedRequest struct {
-	headers map[string]string
-	body    map[string]interface{}
-}
-
 type expectedResponse struct {
 	statusCode int
 	headers    map[string]string
@@ -122,7 +117,7 @@ func manualHttpRequest(url string, rawHttpReq string) net.Conn {
 
 // This is used when reading responses of manually performed HTTP requests
 func manualReadResponse(conn net.Conn) (*http.Response, error) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	bufferSize := 2048
 	buf := make([]byte, bufferSize)
 	respBytes := []byte{}

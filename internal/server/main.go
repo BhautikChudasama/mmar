@@ -1,3 +1,5 @@
+// Package server implements the mmar server functionality.
+// The server accepts client connections and manages tunnels to forward HTTP requests.
 package server
 
 import (
@@ -27,19 +29,24 @@ import (
 	"github.com/yusuf-musleh/mmar/internal/utils"
 )
 
-var CLIENT_MAX_TUNNELS_REACHED = errors.New("Client reached max tunnels limit")
+var ErrClientMaxTunnelsReached = errors.New("client reached max tunnels limit")
 
+// ConfigOptions contains configuration options for the mmar server.
 type ConfigOptions struct {
-	HttpPort    string
-	TcpPort     string
-	ApiKeysFile string
+	HttpPort        string
+	TcpPort         string
+	ApiKeysFile     string
+	MaxTunnelsPerIP int
+	MaxRequestSize  int
 }
 
 type MmarServer struct {
-	mu           sync.Mutex
-	clients      map[string]ClientTunnel
-	tunnelsPerIP map[string][]string
-	authManager  *auth.AuthManager
+	mu              sync.Mutex
+	clients         map[string]ClientTunnel
+	tunnelsPerIP    map[string][]string
+	authManager     *auth.AuthManager
+	maxTunnelsPerIP int
+	maxRequestSize  int
 }
 
 type IncomingRequest struct {
@@ -73,7 +80,7 @@ incomingDrainerLoop:
 		select {
 		case incoming := <-ct.incomingChannel:
 			// Cancel incoming requests
-			incoming.cancel(CLIENT_DISCONNECTED_ERR)
+			incoming.cancel(errors.New("client disconnected"))
 		default:
 			// Close the TunneledRequests channel
 			close(ct.incomingChannel)
@@ -100,7 +107,7 @@ func (ct *ClientTunnel) close(graceful bool) {
 		constants.DEFAULT_COLOR,
 		fmt.Sprintf(
 			"[%s] Client disconnected: %v, closing tunnel...",
-			ct.Tunnel.Id,
+			ct.Id,
 			ct.Conn.RemoteAddr().String(),
 		),
 	)
@@ -114,12 +121,12 @@ func (ct *ClientTunnel) close(graceful bool) {
 		<-gracefulCloseTimer.C
 	}
 
-	ct.Conn.Close()
+	_ = ct.Conn.Close()
 	logger.Log(
 		constants.DEFAULT_COLOR,
 		fmt.Sprintf(
 			"[%s] Tunnel connection closed: %v",
-			ct.Tunnel.Id,
+			ct.Id,
 			ct.Conn.RemoteAddr().String(),
 		),
 	)
@@ -163,14 +170,13 @@ func (ms *MmarServer) handleServerStats(w http.ResponseWriter, r *http.Request) 
 
 	// Marshal the result
 	marshalledStats, err := json.Marshal(stats)
-
 	if err != nil {
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to marshal server stats: %v", err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write(marshalledStats)
+	_, _ = w.Write(marshalledStats)
 }
 
 func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +202,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancelCause(r.Context())
 
 	// Writing request to buffer to forward it
-	go serializeRequest(ctx, r, cancel, serializedReqChannel)
+	go serializeRequest(ctx, r, cancel, serializedReqChannel, ms.maxRequestSize)
 
 	select {
 	case <-ctx.Done():
@@ -229,7 +235,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reqMessage := protocol.TunnelMessage{MsgType: protocol.REQUEST, MsgData: reqMsgData}
 		if err := clientTunnel.SendMessage(reqMessage); err != nil {
 			logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send Request msg to client: %v", err))
-			cancel(FAILED_TO_FORWARD_TO_MMAR_CLIENT_ERR)
+			cancel(errors.New("failed to forward to mmar client"))
 		}
 
 		select {
@@ -245,7 +251,7 @@ func (ms *MmarServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(resp.statusCode)
 
 			// Write the response body to original client
-			w.Write(resp.body)
+			_, _ = w.Write(resp.body)
 		}
 	}
 }
@@ -267,8 +273,8 @@ func (ms *MmarServer) isValidSubdomainName(name string) bool {
 	}
 
 	for _, char := range name {
-		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') || char == '-') {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '-' {
 			return false
 		}
 	}
@@ -299,64 +305,98 @@ func (ms *MmarServer) TunnelLimitedIP(ip string) bool {
 		ms.tunnelsPerIP[ip] = []string{}
 	}
 
-	return len(tunnels) >= constants.MAX_TUNNELS_PER_IP
+	return len(tunnels) >= ms.maxTunnelsPerIP
 }
 
-func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, authToken string) (*ClientTunnel, error) {
-	sendErrorAndCloseWrite := func(msgType uint8, errorText string) error {
-		errorMsg := protocol.TunnelMessage{MsgType: msgType}
-		if err := tunnel.SendMessage(errorMsg); err != nil {
-			logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send error msg to client: %v", err))
-		}
-		// Close write side to signal end of data, but allow client to read the message
-		if tcpConn, ok := tunnel.Conn.(*net.TCPConn); ok {
-			_ = tcpConn.CloseWrite()
-		}
-		return errors.New(errorText)
-	}
+// validateNewTunnelRequest performs all validation checks for a new tunnel request
+func (ms *MmarServer) validateNewTunnelRequest(subdomain, authToken string) (string, error) {
 	// Validate authentication token
 	if ms.authManager != nil {
 		valid, _, err := ms.authManager.ValidateToken(authToken)
 		if !valid {
 			if errors.Is(err, auth.ErrAuthTokenRequired) {
-				return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_REQUIRED, "authentication token required")
+				return "", errors.New("authentication token required")
 			}
-			return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_INVALID, "invalid authentication token")
+			return "", errors.New("invalid authentication token")
 		}
 
 		// Check tunnel limit for this token
 		if ms.authManager.CheckTunnelLimit(authToken) {
-			return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_LIMIT_EXCEEDED, "tunnel limit exceeded for authentication token")
+			return "", errors.New("tunnel limit exceeded for authentication token")
 		}
 	} else if authToken != "" {
 		// If auth manager is not configured but token is provided, reject
-		return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_INVALID, "authentication not configured on server")
+		return "", errors.New("authentication not configured on server")
+	}
+
+	// Validate subdomain if provided
+	if subdomain != "" {
+		if !ms.isValidSubdomainName(subdomain) {
+			return "", errors.New("invalid subdomain name")
+		}
+		return subdomain, nil
+	}
+
+	// Generate unique subdomain if not provided
+	return ms.GenerateUniqueSubdomain(), nil
+}
+
+// sendErrorAndCloseWrite sends an error message to the client and closes the write side of the connection
+func (ms *MmarServer) sendErrorAndCloseWrite(tunnel protocol.Tunnel, msgType uint8, errorText string) error {
+	errorMsg := protocol.TunnelMessage{MsgType: msgType}
+	if err := tunnel.SendMessage(errorMsg); err != nil {
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send error msg to client: %v", err))
+	}
+	// Close write side to signal end of data, but allow client to read the message
+	if tcpConn, ok := tunnel.Conn.(*net.TCPConn); ok {
+		_ = tcpConn.CloseWrite()
+	}
+	return errors.New(errorText)
+}
+
+// registerClientTunnel registers a client tunnel with the server
+func (ms *MmarServer) registerClientTunnel(clientTunnel ClientTunnel, uniqueSubdomain, clientIP, authToken string) {
+	// Add client tunnel to clients
+	ms.clients[uniqueSubdomain] = clientTunnel
+
+	// Associate tunnel with client IP
+	ms.tunnelsPerIP[clientIP] = append(ms.tunnelsPerIP[clientIP], uniqueSubdomain)
+
+	// Associate tunnel with auth token if auth manager is configured
+	if ms.authManager != nil && authToken != "" {
+		ms.authManager.AddTunnel(authToken, uniqueSubdomain)
+	}
+}
+
+func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, authToken string) (*ClientTunnel, error) {
+	// Validate the tunnel request
+	uniqueSubdomain, validationErr := ms.validateNewTunnelRequest(subdomain, authToken)
+	if validationErr != nil {
+		var msgType uint8
+		switch validationErr.Error() {
+		case "authentication token required":
+			msgType = protocol.AUTH_TOKEN_REQUIRED
+		case "invalid authentication token", "authentication not configured on server":
+			msgType = protocol.AUTH_TOKEN_INVALID
+		case "tunnel limit exceeded for authentication token":
+			msgType = protocol.AUTH_TOKEN_LIMIT_EXCEEDED
+		case "invalid subdomain name":
+			msgType = protocol.INVALID_SUBDOMAIN_NAME
+		default:
+			msgType = protocol.INVALID_SUBDOMAIN_NAME
+		}
+		return nil, ms.sendErrorAndCloseWrite(tunnel, msgType, validationErr.Error())
 	}
 
 	// Acquire lock to create new client tunnel data
 	ms.mu.Lock()
 
-	var uniqueSubdomain string
-	var msgType uint8
+	// Check if subdomain is already taken (only for custom subdomains)
 	if subdomain != "" {
-		// Validate custom subdomain name
-		if !ms.isValidSubdomainName(subdomain) {
-			ms.mu.Unlock()
-			return nil, sendErrorAndCloseWrite(protocol.INVALID_SUBDOMAIN_NAME, "invalid subdomain name")
-		}
-
-		// Check if subdomain is already taken
 		if _, exists := ms.clients[subdomain]; exists {
 			ms.mu.Unlock()
-			return nil, sendErrorAndCloseWrite(protocol.SUBDOMAIN_ALREADY_TAKEN, "subdomain already taken")
+			return nil, ms.sendErrorAndCloseWrite(tunnel, protocol.SUBDOMAIN_ALREADY_TAKEN, "subdomain already taken")
 		}
-
-		uniqueSubdomain = subdomain
-		msgType = protocol.TUNNEL_CREATED
-	} else {
-		// Generate unique subdomain for client if not passed in
-		uniqueSubdomain = ms.GenerateUniqueSubdomain()
-		msgType = protocol.TUNNEL_CREATED
 	}
 
 	tunnel.Id = uniqueSubdomain
@@ -388,30 +428,22 @@ func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, 
 		}
 		// Close write side to signal end of data, but allow client to read the message
 		if tcpConn, ok := tunnel.Conn.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
+			_ = tcpConn.CloseWrite()
 		}
 		clientTunnel.close(false)
 		// Release lock once errored
 		ms.mu.Unlock()
-		return nil, CLIENT_MAX_TUNNELS_REACHED
+		return nil, ErrClientMaxTunnelsReached
 	}
 
-	// Add client tunnel to clients
-	ms.clients[uniqueSubdomain] = clientTunnel
-
-	// Associate tunnel with client IP
-	ms.tunnelsPerIP[clientIP] = append(ms.tunnelsPerIP[clientIP], uniqueSubdomain)
-
-	// Associate tunnel with auth token if auth manager is configured
-	if ms.authManager != nil && authToken != "" {
-		ms.authManager.AddTunnel(authToken, uniqueSubdomain)
-	}
+	// Register the client tunnel
+	ms.registerClientTunnel(clientTunnel, uniqueSubdomain, clientIP, authToken)
 
 	// Release lock once created
 	ms.mu.Unlock()
 
 	// Send unique subdomain to client
-	connMessage := protocol.TunnelMessage{MsgType: msgType, MsgData: []byte(uniqueSubdomain)}
+	connMessage := protocol.TunnelMessage{MsgType: protocol.TUNNEL_CREATED, MsgData: []byte(uniqueSubdomain)}
 	if err := clientTunnel.SendMessage(connMessage); err != nil {
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send unique subdomain msg to client: %v", err))
 		return nil, err
@@ -432,7 +464,7 @@ func (ms *MmarServer) handleTcpConnection(conn net.Conn) {
 }
 
 func (ms *MmarServer) closeTunnel(t *protocol.Tunnel) {
-	t.Conn.Close()
+	_ = t.Conn.Close()
 }
 
 func (ms *MmarServer) closeClientTunnel(ct *ClientTunnel) {
@@ -458,7 +490,6 @@ func (ms *MmarServer) closeClientTunnel(ct *ClientTunnel) {
 }
 
 func (ms *MmarServer) closeClientTunnelOrConn(ct *ClientTunnel, t protocol.Tunnel) {
-
 	// If client has not reserved subdomain, just close the tcp connection
 	if !ct.ReservedSubdomain() {
 		ms.closeTunnel(&t)
@@ -475,7 +506,7 @@ func (ms *MmarServer) handleResponseMessages(ct *ClientTunnel, tunnelMsg protoco
 	reqIdBuff := make([]byte, constants.REQUEST_ID_BUFF_SIZE)
 	_, err := io.ReadFull(respReader, reqIdBuff)
 	if err != nil {
-		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] - Failed to parse RequestId for response: %v\n", ct.Tunnel.Id, err))
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] - Failed to parse RequestId for response: %v\n", ct.Id, err))
 		return
 	}
 
@@ -483,13 +514,13 @@ func (ms *MmarServer) handleResponseMessages(ct *ClientTunnel, tunnelMsg protoco
 	reqId := RequestId(binary.LittleEndian.Uint32(reqIdBuff))
 	inflight, loaded := ct.inflightRequests.LoadAndDelete(reqId)
 	if !loaded {
-		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to identify inflight request: %v", ct.Tunnel.Id, reqId))
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to identify inflight request: %v", ct.Id, reqId))
 		return
 	}
 
 	inflightRequest, ok := inflight.(IncomingRequest)
 	if !ok {
-		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to parse inflight request: %v", ct.Tunnel.Id, reqId))
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("[%s] Failed to parse inflight request: %v", ct.Id, reqId))
 		return
 	}
 
@@ -498,24 +529,24 @@ func (ms *MmarServer) handleResponseMessages(ct *ClientTunnel, tunnelMsg protoco
 
 	if respErr != nil {
 		if errors.Is(respErr, io.ErrUnexpectedEOF) || errors.Is(respErr, net.ErrClosed) {
-			inflightRequest.cancel(CLIENT_DISCONNECTED_ERR)
+			inflightRequest.cancel(errors.New("client disconnected"))
 			ms.closeClientTunnel(ct)
 			return
 		}
 		failedReq := fmt.Sprintf("%s - %s%s", inflightRequest.request.Method, html.EscapeString(inflightRequest.request.URL.Path), inflightRequest.request.URL.RawQuery)
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to return response: %v\n\n for req: %v", respErr, failedReq))
-		inflightRequest.cancel(FAILED_TO_READ_RESP_FROM_MMAR_CLIENT_ERR)
+		inflightRequest.cancel(errors.New("failed to read response from mmar client"))
 		return
 	}
 
 	respBody, respBodyErr := io.ReadAll(resp.Body)
 	if respBodyErr != nil {
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to parse response body: %v\n\n", respBodyErr))
-		inflightRequest.cancel(READ_RESP_BODY_ERR)
+		inflightRequest.cancel(errors.New("failed to read response body"))
 		return
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Set headers for response
 	for hKey, hVal := range resp.Header {
@@ -551,7 +582,7 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 				// Set a read timeout, if no response to heartbeat is received within that period,
 				// that means the client has disconnected
 				readDeadline := time.Now().Add((constants.READ_DEADLINE * time.Second))
-				t.Conn.SetReadDeadline(readDeadline)
+				_ = t.Conn.SetReadDeadline(readDeadline)
 			},
 		)
 
@@ -559,7 +590,7 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 		// If a message is received, stop the receiveMessageTimeout and remove the ReadTimeout
 		// as we do not need to send heartbeat or check connection health in this iteration
 		receiveMessageTimeout.Stop()
-		t.Conn.SetReadDeadline(time.Time{})
+		_ = t.Conn.SetReadDeadline(time.Time{})
 
 		if err != nil {
 			logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Receive Message from client tunnel errored: %v", err))
@@ -598,7 +629,7 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 				constants.DEFAULT_COLOR,
 				fmt.Sprintf(
 					"[%s] Tunnel created: %s",
-					ct.Tunnel.Id,
+					ct.Id,
 					t.Conn.RemoteAddr().String(),
 				),
 			)
@@ -686,6 +717,8 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 	}
 }
 
+// Run starts the mmar server with the given configuration.
+// It begins accepting client connections and managing tunnels.
 func Run(config ConfigOptions) {
 	logger.LogStartMmarServer(config.TcpPort, config.HttpPort)
 
@@ -710,9 +743,11 @@ func Run(config ConfigOptions) {
 
 	// Initialize Mmar Server
 	mmarServer := MmarServer{
-		clients:      map[string]ClientTunnel{},
-		tunnelsPerIP: map[string][]string{},
-		authManager:  authManager,
+		clients:         map[string]ClientTunnel{},
+		tunnelsPerIP:    map[string][]string{},
+		authManager:     authManager,
+		maxTunnelsPerIP: config.MaxTunnelsPerIP,
+		maxRequestSize:  config.MaxRequestSize,
 	}
 	mux.Handle("/", logger.LoggerMiddleware(&mmarServer))
 

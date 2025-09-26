@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -23,7 +24,6 @@ func ExtractSubdomain(host string) string {
 
 func ExtractIP(remoteAddr string) string {
 	ip, _, err := net.SplitHostPort(remoteAddr)
-
 	// Return an empty string if we could not extract IP
 	if err != nil {
 		return ""
@@ -32,7 +32,7 @@ func ExtractIP(remoteAddr string) string {
 }
 
 func MmarVersionUsage() {
-	fmt.Fprintf(os.Stdout, "Prints the installed version of mmar.")
+	_, _ = fmt.Fprintf(os.Stdout, "Prints the installed version of mmar.")
 }
 
 func MmarUsage() {
@@ -40,9 +40,9 @@ func MmarUsage() {
 
 Usage:
   mmar <command> [command flags]`
-	fmt.Fprintln(os.Stdout, intro)
+	_, _ = fmt.Fprintln(os.Stdout, intro)
 
-	fmt.Fprint(os.Stdout, "\nCommands:\n")
+	_, _ = fmt.Fprint(os.Stdout, "\nCommands:\n")
 
 	commands := ""
 	for _, subcommand := range constants.MMAR_SUBCOMMANDS {
@@ -50,10 +50,10 @@ Usage:
 		commands = commands + "  " + command + "\n"
 	}
 
-	fmt.Fprintln(os.Stdout, commands)
+	_, _ = fmt.Fprintln(os.Stdout, commands)
 
-	fmt.Fprintln(os.Stdout)
-	fmt.Fprintf(os.Stdout, "Run `mmar <command> -h` to get help for a specific command\n\n")
+	_, _ = fmt.Fprintln(os.Stdout)
+	_, _ = fmt.Fprintf(os.Stdout, "Run `mmar <command> -h` to get help for a specific command\n\n")
 }
 
 // Decode hash string to bytes so it can be compared
@@ -122,4 +122,16 @@ func EnvVarOrDefault(envVar string, defaultVal string) string {
 		return defaultVal
 	}
 	return envValue
+}
+
+func EnvVarOrDefaultInt(envVar string, defaultVal int) int {
+	envValue, ok := os.LookupEnv(envVar)
+	if !ok {
+		return defaultVal
+	}
+	intValue, err := strconv.Atoi(envValue)
+	if err != nil {
+		return defaultVal
+	}
+	return intValue
 }
