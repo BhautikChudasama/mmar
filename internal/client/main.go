@@ -392,7 +392,20 @@ func Run(config ConfigOptions) {
 	logger.Log(constants.YELLOW, "Gracefully shutting down client...")
 	disconnectMsg := protocol.TunnelMessage{MsgType: protocol.CLIENT_DISCONNECT}
 	_ = mmarClient.SendMessage(disconnectMsg)
+
+	// Cancel context to stop goroutines
 	cancel()
+
+	// Give a short time for cleanup, but don't block unnecessarily
 	gracefulShutdownTimer := time.NewTimer(constants.GRACEFUL_SHUTDOWN_TIMEOUT * time.Second)
-	<-gracefulShutdownTimer.C
+	defer gracefulShutdownTimer.Stop()
+
+	// Wait for either the timer or a second interrupt (force quit)
+	select {
+	case <-gracefulShutdownTimer.C:
+		// Normal graceful shutdown completed
+	case <-sigInt:
+		// Force quit on second interrupt
+		logger.Log(constants.RED, "Force quitting...")
+	}
 }
