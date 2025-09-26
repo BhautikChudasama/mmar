@@ -1,3 +1,5 @@
+// Package server implements the mmar server functionality.
+// The server accepts client connections and manages tunnels to forward HTTP requests.
 package server
 
 import (
@@ -29,6 +31,7 @@ import (
 
 var ErrClientMaxTunnelsReached = errors.New("client reached max tunnels limit")
 
+// ConfigOptions contains configuration options for the mmar server.
 type ConfigOptions struct {
 	HttpPort        string
 	TcpPort         string
@@ -305,61 +308,95 @@ func (ms *MmarServer) TunnelLimitedIP(ip string) bool {
 	return len(tunnels) >= ms.maxTunnelsPerIP
 }
 
-func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, authToken string) (*ClientTunnel, error) {
-	sendErrorAndCloseWrite := func(msgType uint8, errorText string) error {
-		errorMsg := protocol.TunnelMessage{MsgType: msgType}
-		if err := tunnel.SendMessage(errorMsg); err != nil {
-			logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send error msg to client: %v", err))
-		}
-		// Close write side to signal end of data, but allow client to read the message
-		if tcpConn, ok := tunnel.Conn.(*net.TCPConn); ok {
-			_ = tcpConn.CloseWrite()
-		}
-		return errors.New(errorText)
-	}
+// validateNewTunnelRequest performs all validation checks for a new tunnel request
+func (ms *MmarServer) validateNewTunnelRequest(subdomain, authToken string) (string, error) {
 	// Validate authentication token
 	if ms.authManager != nil {
 		valid, _, err := ms.authManager.ValidateToken(authToken)
 		if !valid {
 			if errors.Is(err, auth.ErrAuthTokenRequired) {
-				return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_REQUIRED, "authentication token required")
+				return "", errors.New("authentication token required")
 			}
-			return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_INVALID, "invalid authentication token")
+			return "", errors.New("invalid authentication token")
 		}
 
 		// Check tunnel limit for this token
 		if ms.authManager.CheckTunnelLimit(authToken) {
-			return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_LIMIT_EXCEEDED, "tunnel limit exceeded for authentication token")
+			return "", errors.New("tunnel limit exceeded for authentication token")
 		}
 	} else if authToken != "" {
 		// If auth manager is not configured but token is provided, reject
-		return nil, sendErrorAndCloseWrite(protocol.AUTH_TOKEN_INVALID, "authentication not configured on server")
+		return "", errors.New("authentication not configured on server")
+	}
+
+	// Validate subdomain if provided
+	if subdomain != "" {
+		if !ms.isValidSubdomainName(subdomain) {
+			return "", errors.New("invalid subdomain name")
+		}
+		return subdomain, nil
+	}
+
+	// Generate unique subdomain if not provided
+	return ms.GenerateUniqueSubdomain(), nil
+}
+
+// sendErrorAndCloseWrite sends an error message to the client and closes the write side of the connection
+func (ms *MmarServer) sendErrorAndCloseWrite(tunnel protocol.Tunnel, msgType uint8, errorText string) error {
+	errorMsg := protocol.TunnelMessage{MsgType: msgType}
+	if err := tunnel.SendMessage(errorMsg); err != nil {
+		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send error msg to client: %v", err))
+	}
+	// Close write side to signal end of data, but allow client to read the message
+	if tcpConn, ok := tunnel.Conn.(*net.TCPConn); ok {
+		_ = tcpConn.CloseWrite()
+	}
+	return errors.New(errorText)
+}
+
+// registerClientTunnel registers a client tunnel with the server
+func (ms *MmarServer) registerClientTunnel(clientTunnel ClientTunnel, uniqueSubdomain, clientIP, authToken string) {
+	// Add client tunnel to clients
+	ms.clients[uniqueSubdomain] = clientTunnel
+
+	// Associate tunnel with client IP
+	ms.tunnelsPerIP[clientIP] = append(ms.tunnelsPerIP[clientIP], uniqueSubdomain)
+
+	// Associate tunnel with auth token if auth manager is configured
+	if ms.authManager != nil && authToken != "" {
+		ms.authManager.AddTunnel(authToken, uniqueSubdomain)
+	}
+}
+
+func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, authToken string) (*ClientTunnel, error) {
+	// Validate the tunnel request
+	uniqueSubdomain, validationErr := ms.validateNewTunnelRequest(subdomain, authToken)
+	if validationErr != nil {
+		var msgType uint8
+		switch validationErr.Error() {
+		case "authentication token required":
+			msgType = protocol.AUTH_TOKEN_REQUIRED
+		case "invalid authentication token", "authentication not configured on server":
+			msgType = protocol.AUTH_TOKEN_INVALID
+		case "tunnel limit exceeded for authentication token":
+			msgType = protocol.AUTH_TOKEN_LIMIT_EXCEEDED
+		case "invalid subdomain name":
+			msgType = protocol.INVALID_SUBDOMAIN_NAME
+		default:
+			msgType = protocol.INVALID_SUBDOMAIN_NAME
+		}
+		return nil, ms.sendErrorAndCloseWrite(tunnel, msgType, validationErr.Error())
 	}
 
 	// Acquire lock to create new client tunnel data
 	ms.mu.Lock()
 
-	var uniqueSubdomain string
-	var msgType uint8
+	// Check if subdomain is already taken (only for custom subdomains)
 	if subdomain != "" {
-		// Validate custom subdomain name
-		if !ms.isValidSubdomainName(subdomain) {
-			ms.mu.Unlock()
-			return nil, sendErrorAndCloseWrite(protocol.INVALID_SUBDOMAIN_NAME, "invalid subdomain name")
-		}
-
-		// Check if subdomain is already taken
 		if _, exists := ms.clients[subdomain]; exists {
 			ms.mu.Unlock()
-			return nil, sendErrorAndCloseWrite(protocol.SUBDOMAIN_ALREADY_TAKEN, "subdomain already taken")
+			return nil, ms.sendErrorAndCloseWrite(tunnel, protocol.SUBDOMAIN_ALREADY_TAKEN, "subdomain already taken")
 		}
-
-		uniqueSubdomain = subdomain
-		msgType = protocol.TUNNEL_CREATED
-	} else {
-		// Generate unique subdomain for client if not passed in
-		uniqueSubdomain = ms.GenerateUniqueSubdomain()
-		msgType = protocol.TUNNEL_CREATED
 	}
 
 	tunnel.Id = uniqueSubdomain
@@ -399,22 +436,14 @@ func (ms *MmarServer) newClientTunnel(tunnel protocol.Tunnel, subdomain string, 
 		return nil, ErrClientMaxTunnelsReached
 	}
 
-	// Add client tunnel to clients
-	ms.clients[uniqueSubdomain] = clientTunnel
-
-	// Associate tunnel with client IP
-	ms.tunnelsPerIP[clientIP] = append(ms.tunnelsPerIP[clientIP], uniqueSubdomain)
-
-	// Associate tunnel with auth token if auth manager is configured
-	if ms.authManager != nil && authToken != "" {
-		ms.authManager.AddTunnel(authToken, uniqueSubdomain)
-	}
+	// Register the client tunnel
+	ms.registerClientTunnel(clientTunnel, uniqueSubdomain, clientIP, authToken)
 
 	// Release lock once created
 	ms.mu.Unlock()
 
 	// Send unique subdomain to client
-	connMessage := protocol.TunnelMessage{MsgType: msgType, MsgData: []byte(uniqueSubdomain)}
+	connMessage := protocol.TunnelMessage{MsgType: protocol.TUNNEL_CREATED, MsgData: []byte(uniqueSubdomain)}
 	if err := clientTunnel.SendMessage(connMessage); err != nil {
 		logger.Log(constants.DEFAULT_COLOR, fmt.Sprintf("Failed to send unique subdomain msg to client: %v", err))
 		return nil, err
@@ -688,6 +717,8 @@ func (ms *MmarServer) processTunnelMessages(t protocol.Tunnel) {
 	}
 }
 
+// Run starts the mmar server with the given configuration.
+// It begins accepting client connections and managing tunnels.
 func Run(config ConfigOptions) {
 	logger.LogStartMmarServer(config.TcpPort, config.HttpPort)
 

@@ -24,6 +24,7 @@ import (
 	"github.com/yusuf-musleh/mmar/internal/protocol"
 )
 
+// ConfigOptions contains configuration options for the mmar client.
 type ConfigOptions struct {
 	LocalPort      string
 	TunnelHttpPort string
@@ -35,6 +36,7 @@ type ConfigOptions struct {
 	APIKey         string
 }
 
+// MmarClient represents a client connection to an mmar server.
 type MmarClient struct {
 	// Tunnel to Server
 	protocol.Tunnel
@@ -151,26 +153,10 @@ func (mc *MmarClient) handleRequestMessage(tunnelMsg protocol.TunnelMessage) {
 
 	resp, fwdErr := fwdClient.Do(req)
 	if fwdErr != nil {
-		if errors.Is(fwdErr, syscall.ECONNREFUSED) || errors.Is(fwdErr, io.ErrUnexpectedEOF) || errors.Is(fwdErr, io.EOF) {
-			localhostNotRunningMsg := protocol.TunnelMessage{MsgType: protocol.LOCALHOST_NOT_RUNNING, MsgData: msgData}
-			if err := mc.SendMessage(localhostNotRunningMsg); err != nil {
-				log.Fatal(err)
-			}
-			return
-		} else if errors.Is(fwdErr, context.DeadlineExceeded) {
-			destServerTimedoutMsg := protocol.TunnelMessage{MsgType: protocol.DEST_REQUEST_TIMEDOUT, MsgData: msgData}
-			if err := mc.SendMessage(destServerTimedoutMsg); err != nil {
-				log.Fatal(err)
-			}
-			return
-		}
-
-		invalidRespFromDestMsg := protocol.TunnelMessage{MsgType: protocol.INVALID_RESP_FROM_DEST, MsgData: msgData}
-		if err := mc.SendMessage(invalidRespFromDestMsg); err != nil {
-			log.Fatal(err)
-		}
+		mc.handleForwardingError(fwdErr, msgData)
 		return
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	// Writing response to buffer to tunnel it back
 	var responseBuff bytes.Buffer
@@ -185,6 +171,23 @@ func (mc *MmarClient) handleRequestMessage(tunnelMsg protocol.TunnelMessage) {
 	}
 
 	logger.LogHTTP(req, resp.StatusCode, resp.ContentLength, false, true)
+}
+
+// handleForwardingError creates and sends the appropriate error message based on the forwarding error
+func (mc *MmarClient) handleForwardingError(fwdErr error, msgData []byte) {
+	var errorMsg protocol.TunnelMessage
+
+	if errors.Is(fwdErr, syscall.ECONNREFUSED) || errors.Is(fwdErr, io.ErrUnexpectedEOF) || errors.Is(fwdErr, io.EOF) {
+		errorMsg = protocol.TunnelMessage{MsgType: protocol.LOCALHOST_NOT_RUNNING, MsgData: msgData}
+	} else if errors.Is(fwdErr, context.DeadlineExceeded) {
+		errorMsg = protocol.TunnelMessage{MsgType: protocol.DEST_REQUEST_TIMEDOUT, MsgData: msgData}
+	} else {
+		errorMsg = protocol.TunnelMessage{MsgType: protocol.INVALID_RESP_FROM_DEST, MsgData: msgData}
+	}
+
+	if err := mc.SendMessage(errorMsg); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // Keep attempting to reconnect the existing tunnel until successful
@@ -330,6 +333,8 @@ func (mc *MmarClient) ProcessTunnelMessages(ctx context.Context) {
 	}
 }
 
+// Run starts the mmar client with the given configuration.
+// It connects to the server and begins forwarding requests to the local service.
 func Run(config ConfigOptions) {
 	logger.LogStartMmarClient(config.TunnelHost, config.TunnelTcpPort, config.TunnelHttpPort, config.LocalPort)
 

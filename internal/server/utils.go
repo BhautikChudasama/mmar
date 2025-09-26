@@ -96,16 +96,18 @@ func serializeRequest(ctx context.Context, r *http.Request, cancel context.Cance
 			cancel(ErrMaxReqBodySize)
 			return
 		}
+
+		// Append only the bytes that were actually read
+		reqBodyBytes = append(reqBodyBytes, buf[:r]...)
+
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				reqBodyBytes = append(reqBodyBytes, buf[:r]...)
-				break
+				break // End of body
 			}
 			// Cancel request if there was an error reading
 			cancel(ErrReadBodyChunk)
 			return
 		}
-		reqBodyBytes = append(reqBodyBytes, buf[:r]...)
 	}
 
 	// Set actual Content-Length header

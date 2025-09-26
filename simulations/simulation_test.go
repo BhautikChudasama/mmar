@@ -144,6 +144,7 @@ func verifyGetRequestSuccess(t *testing.T, client *http.Client, tunnelUrl string
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedReqHeaders := map[string][]string{
 		"User-Agent":      {"Go-http-client/1.1"}, // Default header in golang client
@@ -189,6 +190,7 @@ func verifyGetRequestFail(t *testing.T, client *http.Client, tunnelUrl string, w
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedReqHeaders := map[string][]string{
 		"User-Agent":      {"Go-http-client/1.1"}, // Default header in golang client
@@ -241,6 +243,7 @@ func verifyPostRequestSuccess(t *testing.T, client *http.Client, tunnelUrl strin
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedReqHeaders := map[string][]string{
 		"User-Agent":      {"Go-http-client/1.1"}, // Default header in golang client
@@ -297,6 +300,7 @@ func verifyPostRequestFail(t *testing.T, client *http.Client, tunnelUrl string, 
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedReqHeaders := map[string][]string{
 		"User-Agent":      {"Go-http-client/1.1"}, // Default header in golang client
@@ -352,6 +356,7 @@ func verifyRedirectsHandled(t *testing.T, client *http.Client, tunnelUrl string,
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedReqHeaders := map[string][]string{
 		"User-Agent":      {"Go-http-client/1.1"}, // Default header in golang client
@@ -613,6 +618,7 @@ func verifyRequestWithLargeBody(t *testing.T, client *http.Client, tunnelUrl str
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedReqHeaders := map[string][]string{
 		"User-Agent":      {"Go-http-client/1.1"}, // Default header in golang client
@@ -699,6 +705,7 @@ func verifyDevServerReturningInvalidRespHandled(t *testing.T, client *http.Clien
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedBody := constants.READ_RESP_BODY_ERR_TEXT
 
@@ -726,6 +733,7 @@ func verifyDevServerLongRunningReqHandledGradefully(t *testing.T, client *http.C
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedBody := constants.DEST_REQUEST_TIMEDOUT_ERR_TEXT
 
@@ -753,6 +761,7 @@ func verifyDevServerCrashHandledGracefully(t *testing.T, client *http.Client, tu
 	if respErr != nil {
 		t.Errorf("Failed to get response: %v", respErr)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedBody := constants.LOCALHOST_NOT_RUNNING_ERR_TEXT
 
@@ -780,7 +789,7 @@ func TestSimulation(t *testing.T) {
 	defer localDevTLSServer.Close()
 
 	// Write cert to file so we are able to pass it into mmar client
-	certErr := os.WriteFile("./temp-cert", localDevTLSServer.Certificate().Raw, 0644) // 0644 is file permissions
+	certErr := os.WriteFile("./temp-cert", localDevTLSServer.Certificate().Raw, 0o644) // 0644 is file permissions
 	if certErr != nil {
 		log.Fatal(certErr)
 	}
